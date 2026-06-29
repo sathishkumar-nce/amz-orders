@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: amz-orders-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-Tekgien159147}
+      POSTGRES_DB: ${DB_NAME:-amz_orders}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db_migration:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    networks:
+      - amz-orders-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-amz_orders}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=2621kB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+
+  # Go Application Service
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: amz-orders-app
+    restart: unless-stopped
+    environment:
+      APP_PORT: ${APP_PORT:-8080}
+      DATABASE_URL: host=postgres port=5432 user=${DB_USER:-postgres} password=${DB_PASSWORD:-Tekgien159147} dbname=${DB_NAME:-amz_orders} sslmode=disable
+      BASELINKER_API_URL: ${BASELINKER_API_URL:-https://api.baselinker.com/connector.php}
+      BASELINKER_TOKEN: 9000807-9001768-2YYPDT6TH06KQFLAB0RQ8UQ3JPPSCVX9Q2C0RP3YMQIVYNP657NBB5CU9BV1PFBI
+      GOOGLE_SHEETS_ID: ${GOOGLE_SHEETS_ID:-1Lzk8ceP5GZ8ePRQVjVX6Nqt676N9-6i_Drcry5emfjE}
+      GOOGLE_CREDENTIALS_FILE: ${GOOGLE_CREDENTIALS_FILE:-./spreadsheet.json}
+      PG_DUMP_PATH: ${PG_DUMP_PATH:-pg_dump}
+      DB_BACKUP_LOCAL_DIR: ${DB_BACKUP_LOCAL_DIR:-./backups}
+      SKU_CSV_PATH: /home/appuser/SKU_V8.csv
+      DELHIVERY_API_TOKEN: 4ef3d31398329662513e7e8dd70cac9c7cee9caf
+      DELHIVERY_SELLER_GSTIN: 33DPIPA6949N1ZF
+    ports:
+      - "${APP_PORT:-8080}:${APP_PORT:-8080}"
+    volumes:
+      - ./SKU_V8.csv:/home/appuser/SKU_V8.csv
+      - ./SKU_V8.csv.meta.json:/home/appuser/SKU_V8.csv.meta.json
+    networks:
+      - amz-orders-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT:-8080}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Nginx Reverse Proxy (Optional - for production)
+  nginx:
+    image: nginx:alpine
+    container_name: amz-orders-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - amz-orders-network
+    depends_on:
+      - app
+    profiles:
+      - production
+
+networks:
+  amz-orders-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: ${POSTGRES_VOLUME_NAME:-amz-orders-postgres-data}
+    external: ${POSTGRES_VOLUME_EXTERNAL:-false}
