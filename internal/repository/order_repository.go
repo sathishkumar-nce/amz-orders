@@ -3181,8 +3181,14 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 	offset := (page - 1) * limit
 
 	whereConditions := []string{}
+	productWhereConditions := []string{}
+	productJoinConditions := []string{"o.amazon_order_id = p.amazon_order_id"}
 	args := []interface{}{}
 	argPos := 1
+	addProductCondition := func(filterCondition string, joinCondition string) {
+		productWhereConditions = append(productWhereConditions, filterCondition)
+		productJoinConditions = append(productJoinConditions, joinCondition)
+	}
 
 	// Build WHERE clause
 	if val, ok := filters["amazon_order_id"].(string); ok && val != "" {
@@ -3208,14 +3214,20 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 	}
 
 	if val, ok := filters["sku"].(string); ok && val != "" {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.sku ILIKE $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("p_filter.sku ILIKE $%d", argPos),
+			fmt.Sprintf("p.sku ILIKE $%d", argPos),
+		)
 		args = append(args, wildcardPattern(val))
 		argPos++
 	}
 
 	if val, ok := filters["thickness"].(string); ok && val != "" {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.thickness ILIKE $%d)", argPos))
-		args = append(args, wildcardPattern(val))
+		addProductCondition(
+			fmt.Sprintf("REPLACE(LOWER(COALESCE(p_filter.thickness, '')), ' ', '') ILIKE $%d", argPos),
+			fmt.Sprintf("REPLACE(LOWER(COALESCE(p.thickness, '')), ' ', '') ILIKE $%d", argPos),
+		)
+		args = append(args, "%"+strings.ReplaceAll(strings.ToLower(strings.TrimSpace(val)), " ", "")+"%")
 		argPos++
 	}
 
@@ -3235,7 +3247,67 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 	}
 
 	if val, ok := filters["quantity"].(float64); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.quantity = $%d)", argPos))
+		operator := "="
+		if rawOperator, ok := filters["quantity_operator"].(string); ok {
+			switch rawOperator {
+			case "gt":
+				operator = ">"
+			case "gte":
+				operator = ">="
+			case "lt":
+				operator = "<"
+			case "lte":
+				operator = "<="
+			}
+		}
+		addProductCondition(
+			fmt.Sprintf("p_filter.quantity %s $%d", operator, argPos),
+			fmt.Sprintf("p.quantity %s $%d", operator, argPos),
+		)
+		args = append(args, val)
+		argPos++
+	}
+
+	if val, ok := filters["default_width_in_inches"].(float64); ok {
+		operator := "="
+		if rawOperator, ok := filters["default_width_in_inches_operator"].(string); ok {
+			switch rawOperator {
+			case "gt":
+				operator = ">"
+			case "gte":
+				operator = ">="
+			case "lt":
+				operator = "<"
+			case "lte":
+				operator = "<="
+			}
+		}
+		addProductCondition(
+			fmt.Sprintf("p_filter.default_width_in_inches %s $%d", operator, argPos),
+			fmt.Sprintf("p.default_width_in_inches %s $%d", operator, argPos),
+		)
+		args = append(args, val)
+		argPos++
+	}
+
+	if val, ok := filters["default_length_in_inches"].(float64); ok {
+		operator := "="
+		if rawOperator, ok := filters["default_length_in_inches_operator"].(string); ok {
+			switch rawOperator {
+			case "gt":
+				operator = ">"
+			case "gte":
+				operator = ">="
+			case "lt":
+				operator = "<"
+			case "lte":
+				operator = "<="
+			}
+		}
+		addProductCondition(
+			fmt.Sprintf("p_filter.default_length_in_inches %s $%d", operator, argPos),
+			fmt.Sprintf("p.default_length_in_inches %s $%d", operator, argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
@@ -3253,43 +3325,64 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 	}
 
 	if val, ok := filters["return_initiated"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.return_initiated = $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("p_filter.return_initiated = $%d", argPos),
+			fmt.Sprintf("p.return_initiated = $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
 
 	if val, ok := filters["return_initiated_exclude"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND COALESCE(p_filter.return_initiated, FALSE) <> $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("COALESCE(p_filter.return_initiated, FALSE) <> $%d", argPos),
+			fmt.Sprintf("COALESCE(p.return_initiated, FALSE) <> $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
 
 	if val, ok := filters["return_initiated_compromised"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.return_initiated_compromised = $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("p_filter.return_initiated_compromised = $%d", argPos),
+			fmt.Sprintf("p.return_initiated_compromised = $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
 
 	if val, ok := filters["other_issues"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.other_issues = $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("p_filter.other_issues = $%d", argPos),
+			fmt.Sprintf("p.other_issues = $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
 
 	if val, ok := filters["other_issues_exclude"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND COALESCE(p_filter.other_issues, FALSE) <> $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("COALESCE(p_filter.other_issues, FALSE) <> $%d", argPos),
+			fmt.Sprintf("COALESCE(p.other_issues, FALSE) <> $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
 
 	if val, ok := filters["safety_claimed"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.safety_claimed = $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("p_filter.safety_claimed = $%d", argPos),
+			fmt.Sprintf("p.safety_claimed = $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
 
 	if val, ok := filters["safety_claimed_exclude"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND COALESCE(p_filter.safety_claimed, FALSE) <> $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("COALESCE(p_filter.safety_claimed, FALSE) <> $%d", argPos),
+			fmt.Sprintf("COALESCE(p.safety_claimed, FALSE) <> $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
@@ -3307,21 +3400,38 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 	}
 
 	if val, ok := filters["round_product"].(bool); ok {
-		whereConditions = append(whereConditions, fmt.Sprintf("EXISTS (SELECT 1 FROM amazon_order_products p_filter WHERE p_filter.amazon_order_id = o.amazon_order_id AND p_filter.is_round = $%d)", argPos))
+		addProductCondition(
+			fmt.Sprintf("p_filter.is_round = $%d", argPos),
+			fmt.Sprintf("p.is_round = $%d", argPos),
+		)
 		args = append(args, val)
 		argPos++
 	}
 
 	if val, ok := filters["missing_customer_inputs"].(bool); ok && val {
-		whereConditions = append(whereConditions, fmt.Sprintf(`EXISTS (
-			SELECT 1 FROM amazon_order_products p_filter
-			WHERE p_filter.amazon_order_id = o.amazon_order_id
-			AND p_filter.customer_width_in_inches IS NULL
+		addProductCondition(
+			`p_filter.customer_width_in_inches IS NULL
 			AND p_filter.customer_length_in_inches IS NULL
 			AND p_filter.customer_width_in_mm IS NULL
 			AND p_filter.customer_length_in_mm IS NULL
-			AND COALESCE(NULLIF(BTRIM(p_filter.corner_radius_and_notes), ''), '') = ''
-		)`))
+			AND COALESCE(NULLIF(BTRIM(p_filter.corner_radius_and_notes), ''), '') = ''`,
+			`p.customer_width_in_inches IS NULL
+			AND p.customer_length_in_inches IS NULL
+			AND p.customer_width_in_mm IS NULL
+			AND p.customer_length_in_mm IS NULL
+			AND COALESCE(NULLIF(BTRIM(p.corner_radius_and_notes), ''), '') = ''`,
+		)
+	}
+
+	if val, ok := filters["has_customer_inputs"].(bool); ok && val {
+		addProductCondition(
+			`(p_filter.customer_width_in_inches IS NOT NULL
+			OR p_filter.customer_length_in_inches IS NOT NULL
+			OR COALESCE(NULLIF(BTRIM(p_filter.corner_radius_and_notes), ''), '') <> '')`,
+			`(p.customer_width_in_inches IS NOT NULL
+			OR p.customer_length_in_inches IS NOT NULL
+			OR COALESCE(NULLIF(BTRIM(p.corner_radius_and_notes), ''), '') <> '')`,
+		)
 	}
 
 	if val, ok := filters["date_from"].(string); ok && val != "" {
@@ -3366,10 +3476,19 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 		argPos++
 	}
 
+	if len(productWhereConditions) > 0 {
+		whereConditions = append(whereConditions, fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM amazon_order_products p_filter
+			WHERE p_filter.amazon_order_id = o.amazon_order_id
+			AND %s
+		)`, strings.Join(productWhereConditions, " AND ")))
+	}
+
 	whereClause := ""
 	if len(whereConditions) > 0 {
 		whereClause = "WHERE " + strings.Join(whereConditions, " AND ")
 	}
+	productJoinClause := strings.Join(productJoinConditions, " AND ")
 
 	// Count total
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM amazon_orders o %s", whereClause)
@@ -3435,12 +3554,12 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 				'[]'
 			) as products
 		FROM amazon_orders o
-		LEFT JOIN amazon_order_products p ON o.amazon_order_id = p.amazon_order_id
+		LEFT JOIN amazon_order_products p ON %s
 		%s
 		GROUP BY o.amazon_order_id
 		ORDER BY o.date_confirmed DESC NULLS LAST, o.date_add DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argPos, argPos+1)
+	`, productJoinClause, whereClause, argPos, argPos+1)
 
 	args = append(args, limit, offset)
 

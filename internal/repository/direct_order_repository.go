@@ -374,8 +374,8 @@ func (r *DirectOrderRepository) List(ctx context.Context, filters models.DirectO
 	if filters.Limit < 1 {
 		filters.Limit = 20
 	}
-	if filters.Limit > 100 {
-		filters.Limit = 100
+	if filters.Limit > 500 {
+		filters.Limit = 500
 	}
 	offset := (filters.Page - 1) * filters.Limit
 	args = append(args, filters.Limit, offset)

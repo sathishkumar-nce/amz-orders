@@ -36,6 +36,15 @@ func isDateOnly(value string) bool {
 	return len(value) == len("2006-01-02")
 }
 
+func parseFilterOperator(value string) (string, bool) {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "gt", "gte", "lt", "lte", "eq":
+		return strings.TrimSpace(strings.ToLower(value)), true
+	default:
+		return "", false
+	}
+}
+
 func executiveDashboardLocation() *time.Location {
 	return time.FixedZone("IST", 5*60*60+30*60)
 }
@@ -134,6 +143,24 @@ func applySharedListFilters(c *gin.Context, filters map[string]interface{}) {
 				}
 			case "order_status":
 				filters["order_status"] = value
+			case "default_width_in_inches":
+				if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+					filters["default_width_in_inches"] = parsed
+					if operator, ok := parseFilterOperator(c.Query("search_operator")); ok {
+						filters["default_width_in_inches_operator"] = operator
+					} else {
+						filters["default_width_in_inches_operator"] = "eq"
+					}
+				}
+			case "default_length_in_inches":
+				if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+					filters["default_length_in_inches"] = parsed
+					if operator, ok := parseFilterOperator(c.Query("search_operator")); ok {
+						filters["default_length_in_inches_operator"] = operator
+					} else {
+						filters["default_length_in_inches_operator"] = "eq"
+					}
+				}
 			}
 		}
 	}
@@ -152,9 +179,37 @@ func applySharedListFilters(c *gin.Context, filters map[string]interface{}) {
 	if val := c.Query("sku"); val != "" {
 		filters["sku"] = val
 	}
+	if val := c.Query("thickness"); val != "" {
+		filters["thickness"] = strings.TrimSpace(val)
+	}
 	if val := c.Query("quantity"); val != "" {
 		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
 			filters["quantity"] = parsed
+			if operator, ok := parseFilterOperator(c.Query("quantity_operator")); ok {
+				filters["quantity_operator"] = operator
+			} else {
+				filters["quantity_operator"] = "eq"
+			}
+		}
+	}
+	if val := c.Query("default_width_in_inches"); val != "" {
+		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
+			filters["default_width_in_inches"] = parsed
+			if operator, ok := parseFilterOperator(c.Query("default_width_in_inches_operator")); ok {
+				filters["default_width_in_inches_operator"] = operator
+			} else {
+				filters["default_width_in_inches_operator"] = "eq"
+			}
+		}
+	}
+	if val := c.Query("default_length_in_inches"); val != "" {
+		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
+			filters["default_length_in_inches"] = parsed
+			if operator, ok := parseFilterOperator(c.Query("default_length_in_inches_operator")); ok {
+				filters["default_length_in_inches_operator"] = operator
+			} else {
+				filters["default_length_in_inches_operator"] = "eq"
+			}
 		}
 	}
 	if val := c.Query("confirmed_date"); val != "" {
@@ -206,14 +261,39 @@ func applySharedListFilters(c *gin.Context, filters map[string]interface{}) {
 			filters["round_product"] = parsed
 		}
 	}
+	if val := c.Query("is_round"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			filters["round_product"] = parsed
+		}
+	}
 	if val := c.Query("missing_customer_inputs"); val != "" {
 		if parsed, err := strconv.ParseBool(val); err == nil {
 			filters["missing_customer_inputs"] = parsed
 		}
 	}
+	if val := c.Query("has_customer_inputs"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			filters["has_customer_inputs"] = parsed
+		}
+	}
+	if val := c.Query("return_initiated"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			filters["return_initiated"] = parsed
+		}
+	}
 	if val := c.Query("return_initiated_compromised"); val != "" {
 		if parsed, err := strconv.ParseBool(val); err == nil {
 			filters["return_initiated_compromised"] = parsed
+		}
+	}
+	if val := c.Query("other_issues"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			filters["other_issues"] = parsed
+		}
+	}
+	if val := c.Query("safety_claimed"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			filters["safety_claimed"] = parsed
 		}
 	}
 }
@@ -290,7 +370,7 @@ func (h *OrderHandler) ListOrders(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if limit < 1 || limit > 200 {
+	if limit < 1 || limit > 500 {
 		limit = 100
 	}
 
@@ -701,20 +781,15 @@ func (h *OrderHandler) ListIssues(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if limit < 1 || limit > 200 {
+	if limit < 1 || limit > 500 {
 		limit = 100
 	}
 
-	filters := map[string]interface{}{
-		"other_issues_exclude": false,
-	}
-
-	if val := c.Query("other_issues"); val != "" {
-		if parsed, err := strconv.ParseBool(val); err == nil {
-			filters["other_issues"] = parsed
-		}
-	}
+	filters := map[string]interface{}{}
 	applySharedListFilters(c, filters)
+	if _, hasExplicitOtherIssues := filters["other_issues"]; !hasExplicitOtherIssues {
+		filters["other_issues_exclude"] = false
+	}
 	log.Printf("📋 List issues requested (page=%d limit=%d filters=%d)", page, limit, len(filters))
 
 	orders, total, err := h.service.ListOrders(c.Request.Context(), filters, page, limit)
@@ -744,20 +819,15 @@ func (h *OrderHandler) ListReturns(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if limit < 1 || limit > 200 {
+	if limit < 1 || limit > 500 {
 		limit = 100
 	}
 
-	filters := map[string]interface{}{
-		"return_initiated_exclude": false,
-	}
-
-	if val := c.Query("return_initiated"); val != "" {
-		if parsed, err := strconv.ParseBool(val); err == nil {
-			filters["return_initiated"] = parsed
-		}
-	}
+	filters := map[string]interface{}{}
 	applySharedListFilters(c, filters)
+	if _, hasExplicitReturnInitiated := filters["return_initiated"]; !hasExplicitReturnInitiated {
+		filters["return_initiated_exclude"] = false
+	}
 	log.Printf("📋 List returns requested (page=%d limit=%d filters=%d)", page, limit, len(filters))
 
 	orders, total, err := h.service.ListOrders(c.Request.Context(), filters, page, limit)
@@ -787,20 +857,15 @@ func (h *OrderHandler) ListSafetyClaims(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if limit < 1 || limit > 200 {
+	if limit < 1 || limit > 500 {
 		limit = 100
 	}
 
-	filters := map[string]interface{}{
-		"safety_claimed_exclude": false,
-	}
-
-	if val := c.Query("safety_claimed"); val != "" {
-		if parsed, err := strconv.ParseBool(val); err == nil {
-			filters["safety_claimed"] = parsed
-		}
-	}
+	filters := map[string]interface{}{}
 	applySharedListFilters(c, filters)
+	if _, hasExplicitSafetyClaimed := filters["safety_claimed"]; !hasExplicitSafetyClaimed {
+		filters["safety_claimed_exclude"] = false
+	}
 	log.Printf("📋 List safety claims requested (page=%d limit=%d filters=%d)", page, limit, len(filters))
 
 	orders, total, err := h.service.ListOrders(c.Request.Context(), filters, page, limit)
