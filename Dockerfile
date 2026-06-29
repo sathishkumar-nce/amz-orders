@@ -40,7 +40,6 @@ COPY --from=builder /app/bin/server ./server
 COPY --from=builder /app/SKU_V8.csv ./SKU_V8.csv
 COPY --from=builder /app/spreadsheet.json ./spreadsheet.json
 COPY --from=builder /app/sample_orders.json ./sample_orders.json
-COPY --from=builder /app/db_migration ./db_migration
 
 # Change ownership
 RUN chown -R appuser:appuser /home/appuser

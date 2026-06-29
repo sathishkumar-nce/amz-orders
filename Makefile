@@ -10,7 +10,7 @@ POSTGRES_VOLUME_NAME ?= amz-orders-postgres-data
 POSTGRES_VOLUME_EXTERNAL ?= false
 SERVICE ?= app
 
-.PHONY: help fresh fresh-prod dev prod dev-app prod-app build up down logs status health db-shell db-logs
+.PHONY: help fresh fresh-prod dev prod dev-app prod-app build up down logs status health db-shell db-logs migrate
 
 help:
 	@echo "Simple commands:"
@@ -21,6 +21,7 @@ help:
 	@echo "  make dev-app    Rebuild and restart only the Go app container, keep DB and volume intact"
 	@echo "  make prod-app   Rebuild and restart only the Go app container in prod, keep DB and volume intact"
 	@echo "  make up         Start services without deleting the DB volume"
+	@echo "  make migrate    Run goose migrations against the running Postgres service"
 	@echo "  make down       Stop services and remove the DB volume"
 	@echo "  make logs       Tail logs for SERVICE=app by default"
 	@echo "  make status     Show container status"
@@ -60,6 +61,10 @@ up:
 	POSTGRES_VOLUME_NAME="$(POSTGRES_VOLUME_NAME)" POSTGRES_VOLUME_EXTERNAL="$(POSTGRES_VOLUME_EXTERNAL)" \
 	$(COMPOSE) --env-file "$(ENV_FILE)" up -d --build postgres app
 
+migrate:
+	POSTGRES_VOLUME_NAME="$(POSTGRES_VOLUME_NAME)" POSTGRES_VOLUME_EXTERNAL="$(POSTGRES_VOLUME_EXTERNAL)" \
+	$(COMPOSE) --env-file "$(ENV_FILE)" run --rm migrate
+
 prod:
 	@echo "Starting fresh production stack..."
 	POSTGRES_VOLUME_NAME="$(POSTGRES_VOLUME_NAME)" POSTGRES_VOLUME_EXTERNAL=false \
@@ -97,5 +102,4 @@ db-shell:
 
 db-logs:
 	$(COMPOSE) --env-file "$(ENV_FILE)" logs -f postgres
-
 

@@ -13,7 +13,6 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db_migration:/docker-entrypoint-initdb.d:ro
     ports:
       - "${DB_PORT:-5432}:5432"
     networks:
@@ -38,6 +37,29 @@ services:
       -c work_mem=2621kB
       -c min_wal_size=1GB
       -c max_wal_size=4GB
+
+  migrate:
+    image: golang:1.25.8-alpine
+    container_name: amz-orders-migrate
+    working_dir: /workspace
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: host=postgres port=5432 user=${DB_USER:-postgres} password=${DB_PASSWORD:-Tekgien159147} dbname=${DB_NAME:-amz_orders} sslmode=disable
+      GOOSE_MIGRATION_DIR: /workspace/db_migration
+    volumes:
+      - ./:/workspace
+    networks:
+      - amz-orders-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -lc "
+      apk add --no-cache git &&
+      go install github.com/pressly/goose/v3/cmd/goose@latest &&
+      /go/bin/goose -dir \"$${GOOSE_MIGRATION_DIR}\" up
+      "
+    restart: "no"
 
   # Go Application Service
   app:
@@ -66,8 +88,8 @@ services:
     networks:
       - amz-orders-network
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:${APP_PORT:-8080}/health"]
       interval: 30s

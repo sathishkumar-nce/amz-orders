@@ -282,7 +282,7 @@ If `return_status` is not provided, the handler removes rows where `return_statu
 
 ## Database Shape
 
-The migration file `db_migration/v1.sql` creates:
+The initial goose migration `db_migration/00001_initial_schema.sql` creates:
 
 - `amazon_orders`
 - `amazon_order_products`
@@ -302,7 +302,7 @@ The repo includes additional backend code that is not registered in the current 
 
 - `internal/handlers/direct_order_handler.go`
 - `internal/repository/direct_order_repository.go`
-- direct-order tables in `db_migration/v1.sql`
+- direct-order tables in `db_migration/00001_initial_schema.sql`
 - `internal/handlers/sku_handler.go`
 
 So today:
@@ -360,7 +360,8 @@ docker run --name amz-orders-db \
 ### 3. Run migration
 
 ```bash
-docker exec -i amz-orders-db psql -U postgres -d amz_orders < db_migration/v1.sql
+go install github.com/pressly/goose/v3/cmd/goose@latest
+goose -dir db_migration postgres "postgres://postgres:postgres@localhost:5432/amz_orders?sslmode=disable" up
 ```
 
 ### 4. Install dependencies

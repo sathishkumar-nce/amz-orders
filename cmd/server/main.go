@@ -47,10 +47,6 @@ func main() {
 	}
 	defer pool.Close()
 
-	if err := db.RunSQLMigrations(ctx, pool, "./db_migration"); err != nil {
-		log.Fatalf("Failed to run database migrations: %v", err)
-	}
-
 	// Initialize BaseLinker client
 	blClient := baselinker.NewClient(cfg.BaseLinkerAPIURL, cfg.BaseLinkerToken)
 
