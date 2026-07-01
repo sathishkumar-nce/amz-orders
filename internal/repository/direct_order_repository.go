@@ -509,7 +509,8 @@ func (r *DirectOrderRepository) scanOrders(ctx context.Context, rows pgx.Rows) (
 
 func (r *DirectOrderRepository) getItemsByOrderID(ctx context.Context, orderID string) ([]models.DirectOrderItem, error) {
 	query := `
-		SELECT id, created_at, updated_at, order_id, item, quantity, dimension, thickness, weight, amount, remark, updated_by, sku, hsn, unit_price, tax_rate
+		SELECT id, created_at, updated_at, order_id, item, quantity, dimension, thickness, weight, amount, remark, updated_by, sku, hsn, unit_price, tax_rate,
+			customer_width_in_inches, customer_length_in_inches, customer_width_in_mm, customer_length_in_mm, corner_radius_and_notes
 		FROM direct_order_items
 		WHERE order_id = $1
 		ORDER BY id ASC
@@ -527,6 +528,7 @@ func (r *DirectOrderRepository) getItemsByOrderID(ctx context.Context, orderID s
 		if err := rows.Scan(
 			&item.ID, &item.CreatedAt, &item.UpdatedAt, &item.OrderID, &item.Item, &item.Quantity, &item.Dimension,
 			&item.Thickness, &item.Weight, &item.Amount, &item.Remark, &item.UpdatedBy, &item.SKU, &item.HSN, &item.UnitPrice, &item.TaxRate,
+			&item.CustomerWidthInches, &item.CustomerLengthInches, &item.CustomerWidthMM, &item.CustomerLengthMM, &item.CornerRadiusAndNotes,
 		); err != nil {
 			return nil, err
 		}
@@ -543,8 +545,9 @@ func (r *DirectOrderRepository) replaceItems(ctx context.Context, tx pgx.Tx, ord
 
 	itemQuery := `
 		INSERT INTO direct_order_items (
-			order_id, item, quantity, dimension, thickness, weight, amount, remark, updated_by, sku, hsn, unit_price, tax_rate
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			order_id, item, quantity, dimension, thickness, weight, amount, remark, updated_by, sku, hsn, unit_price, tax_rate,
+			customer_width_in_inches, customer_length_in_inches, customer_width_in_mm, customer_length_in_mm, corner_radius_and_notes
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 	for _, item := range items {
 		if _, err := tx.Exec(ctx, itemQuery,
@@ -561,6 +564,11 @@ func (r *DirectOrderRepository) replaceItems(ctx context.Context, tx pgx.Tx, ord
 			item.HSN,
 			item.UnitPrice,
 			item.TaxRate,
+			item.CustomerWidthInches,
+			item.CustomerLengthInches,
+			item.CustomerWidthMM,
+			item.CustomerLengthMM,
+			item.CornerRadiusAndNotes,
 		); err != nil {
 			return err
 		}
@@ -661,6 +669,294 @@ func buildDirectOrderWhere(filters models.DirectOrderFilters) (string, []interfa
 	}
 
 	return strings.Join(whereClauses, " AND "), args, argIndex
+}
+
+func buildDirectOrderDashboardConditions(filters models.ExecutiveDashboardFilters, orderAlias string, argPos int) ([]string, []interface{}, int) {
+	conditions := []string{fmt.Sprintf("%s.deleted_at IS NULL", orderAlias)}
+	args := make([]interface{}, 0, 6)
+
+	if filters.FromDate != nil {
+		conditions = append(conditions, fmt.Sprintf("COALESCE(%s.invoice_date, %s.created_at) >= $%d", orderAlias, orderAlias, argPos))
+		args = append(args, *filters.FromDate)
+		argPos++
+	}
+	if filters.ToDate != nil {
+		conditions = append(conditions, fmt.Sprintf("COALESCE(%s.invoice_date, %s.created_at) < $%d", orderAlias, orderAlias, argPos))
+		args = append(args, *filters.ToDate)
+		argPos++
+	}
+	if strings.TrimSpace(filters.State) != "" {
+		conditions = append(conditions, fmt.Sprintf("COALESCE(NULLIF(BTRIM(%s.state), ''), '') ILIKE $%d", orderAlias, argPos))
+		args = append(args, wildcardPattern(filters.State))
+		argPos++
+	}
+	if strings.TrimSpace(filters.City) != "" {
+		conditions = append(conditions, fmt.Sprintf("COALESCE(NULLIF(BTRIM(%s.city), ''), '') ILIKE $%d", orderAlias, argPos))
+		args = append(args, wildcardPattern(filters.City))
+		argPos++
+	}
+	if strings.TrimSpace(filters.OrderStatus) != "" {
+		conditions = append(conditions, fmt.Sprintf("%s.order_status = $%d", orderAlias, argPos))
+		args = append(args, filters.OrderStatus)
+		argPos++
+	}
+	if strings.TrimSpace(filters.Thickness) != "" {
+		conditions = append(conditions, fmt.Sprintf(`EXISTS (
+			SELECT 1
+			FROM direct_order_items doi_filter
+			WHERE doi_filter.order_id = %s.order_id
+			  AND COALESCE(NULLIF(BTRIM(doi_filter.thickness), ''), '') ILIKE $%d
+		)`, orderAlias, argPos))
+		args = append(args, wildcardPattern(filters.Thickness))
+		argPos++
+	}
+
+	return conditions, args, argPos
+}
+
+func (r *DirectOrderRepository) GetExecutiveDashboard(ctx context.Context, filters models.ExecutiveDashboardFilters) (*models.DirectOrderExecutiveDashboardResponse, error) {
+	if filters.FromDate == nil || filters.ToDate == nil {
+		return nil, fmt.Errorf("direct order executive dashboard requires from_date and to_date")
+	}
+
+	location := analyticsISTLocation()
+	response := &models.DirectOrderExecutiveDashboardResponse{
+		GeneratedAt:       time.Now(),
+		DateRange:         filters.DateRange,
+		RangeStart:        filters.FromDate.In(location).Format("2006-01-02"),
+		RangeEnd:          filters.ToDate.Add(-time.Second).In(location).Format("2006-01-02"),
+		AvailableStates:   []string{},
+		AvailableCities:   []string{},
+		OrdersTrend:       []models.AnalyticsTimePoint{},
+		OtherIssuesTrend:  []models.AnalyticsTimePoint{},
+		OrdersByState:     []models.AnalyticsChartSlice{},
+		OrdersByCity:      []models.AnalyticsChartSlice{},
+		OrdersByThickness: []models.AnalyticsChartSlice{},
+	}
+
+	baseConditions, baseArgs, _ := buildDirectOrderDashboardConditions(filters, "o", 1)
+	baseWhere := buildWhereClause(baseConditions)
+
+	queryCount := func(query string, args ...interface{}) (int, error) {
+		var count int
+		if err := r.db.QueryRow(ctx, query, args...).Scan(&count); err != nil {
+			return 0, err
+		}
+		return count, nil
+	}
+
+	var err error
+	if response.Summary.TotalOrders, err = queryCount(
+		fmt.Sprintf("SELECT COUNT(DISTINCT o.order_id) FROM direct_orders o %s", baseWhere),
+		baseArgs...,
+	); err != nil {
+		return nil, fmt.Errorf("count direct total orders: %w", err)
+	}
+
+	nextArg := len(baseArgs) + 1
+	statusCount := func(status string) (int, error) {
+		args := append(append([]interface{}{}, baseArgs...), status)
+		return queryCount(
+			fmt.Sprintf("SELECT COUNT(DISTINCT o.order_id) FROM direct_orders o %s", appendWhereCondition(baseWhere, fmt.Sprintf("o.order_status = $%d", nextArg))),
+			args...,
+		)
+	}
+
+	if response.Summary.ManufacturedOrders, err = statusCount("manufactured"); err != nil {
+		return nil, fmt.Errorf("count manufactured direct orders: %w", err)
+	}
+	if response.Summary.OtherIssuesOrders, err = statusCount("other-issues"); err != nil {
+		return nil, fmt.Errorf("count other-issues direct orders: %w", err)
+	}
+	if response.Summary.CancelledOrders, err = statusCount("cancelled"); err != nil {
+		return nil, fmt.Errorf("count cancelled direct orders: %w", err)
+	}
+	if response.Summary.OnHoldOrders, err = statusCount("on-hold"); err != nil {
+		return nil, fmt.Errorf("count on-hold direct orders: %w", err)
+	}
+
+	days := int(filters.ToDate.Sub(*filters.FromDate).Hours() / 24)
+	if days <= 0 {
+		days = 1
+	}
+	if response.Summary.TotalOrders > 0 {
+		response.Summary.AveragePerDay = float64(response.Summary.TotalOrders) / float64(days)
+	}
+
+	orderTrendCounts := make(map[string]float64)
+	orderTrendRows, err := r.db.Query(ctx, fmt.Sprintf(`
+		SELECT TO_CHAR(COALESCE(o.invoice_date, o.created_at)::date, 'YYYY-MM-DD') AS day_key,
+		       COUNT(DISTINCT o.order_id) AS count
+		FROM direct_orders o
+		%s
+		GROUP BY 1
+		ORDER BY 1
+	`, baseWhere), baseArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query direct orders trend: %w", err)
+	}
+	for orderTrendRows.Next() {
+		var dayKey string
+		var count float64
+		if err := orderTrendRows.Scan(&dayKey, &count); err != nil {
+			orderTrendRows.Close()
+			return nil, fmt.Errorf("scan direct orders trend: %w", err)
+		}
+		orderTrendCounts[dayKey] = count
+	}
+	if err := orderTrendRows.Err(); err != nil {
+		orderTrendRows.Close()
+		return nil, fmt.Errorf("iterate direct orders trend: %w", err)
+	}
+	orderTrendRows.Close()
+
+	otherIssueArgs := append(append([]interface{}{}, baseArgs...), "other-issues")
+	otherIssueWhere := appendWhereCondition(baseWhere, fmt.Sprintf("o.order_status = $%d", nextArg))
+	otherIssueTrendCounts := make(map[string]float64)
+	otherIssueRows, err := r.db.Query(ctx, fmt.Sprintf(`
+		SELECT TO_CHAR(COALESCE(o.updated_at, o.invoice_date, o.created_at)::date, 'YYYY-MM-DD') AS day_key,
+		       COUNT(DISTINCT o.order_id) AS count
+		FROM direct_orders o
+		%s
+		GROUP BY 1
+		ORDER BY 1
+	`, otherIssueWhere), otherIssueArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query direct other issues trend: %w", err)
+	}
+	for otherIssueRows.Next() {
+		var dayKey string
+		var count float64
+		if err := otherIssueRows.Scan(&dayKey, &count); err != nil {
+			otherIssueRows.Close()
+			return nil, fmt.Errorf("scan direct other issues trend: %w", err)
+		}
+		otherIssueTrendCounts[dayKey] = count
+	}
+	if err := otherIssueRows.Err(); err != nil {
+		otherIssueRows.Close()
+		return nil, fmt.Errorf("iterate direct other issues trend: %w", err)
+	}
+	otherIssueRows.Close()
+
+	dailyPeriods := buildDailyAnalyticsPeriods(filters.FromDate.In(location), filters.ToDate.In(location))
+	for _, period := range dailyPeriods {
+		dayKey := period.Start.Format("2006-01-02")
+		response.OrdersTrend = append(response.OrdersTrend, models.AnalyticsTimePoint{
+			Date:  dayKey,
+			Label: period.Label,
+			Count: orderTrendCounts[dayKey],
+		})
+		response.OtherIssuesTrend = append(response.OtherIssuesTrend, models.AnalyticsTimePoint{
+			Date:  dayKey,
+			Label: period.Label,
+			Count: otherIssueTrendCounts[dayKey],
+		})
+	}
+
+	stateRows, err := r.db.Query(ctx, fmt.Sprintf(`
+		SELECT COALESCE(NULLIF(BTRIM(o.state), ''), 'Not available') AS label,
+		       COUNT(DISTINCT o.order_id) AS count
+		FROM direct_orders o
+		%s
+		GROUP BY 1
+		ORDER BY count DESC, label ASC
+	`, baseWhere), baseArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query direct orders by state: %w", err)
+	}
+	for stateRows.Next() {
+		var slice models.AnalyticsChartSlice
+		if err := stateRows.Scan(&slice.Label, &slice.Count); err != nil {
+			stateRows.Close()
+			return nil, fmt.Errorf("scan direct orders by state: %w", err)
+		}
+		response.OrdersByState = append(response.OrdersByState, slice)
+	}
+	if err := stateRows.Err(); err != nil {
+		stateRows.Close()
+		return nil, fmt.Errorf("iterate direct orders by state: %w", err)
+	}
+	stateRows.Close()
+
+	cityRows, err := r.db.Query(ctx, fmt.Sprintf(`
+		SELECT COALESCE(NULLIF(BTRIM(o.city), ''), 'Not available') AS label,
+		       COUNT(DISTINCT o.order_id) AS count
+		FROM direct_orders o
+		%s
+		GROUP BY 1
+		ORDER BY count DESC, label ASC
+	`, baseWhere), baseArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query direct orders by city: %w", err)
+	}
+	for cityRows.Next() {
+		var slice models.AnalyticsChartSlice
+		if err := cityRows.Scan(&slice.Label, &slice.Count); err != nil {
+			cityRows.Close()
+			return nil, fmt.Errorf("scan direct orders by city: %w", err)
+		}
+		response.OrdersByCity = append(response.OrdersByCity, slice)
+	}
+	if err := cityRows.Err(); err != nil {
+		cityRows.Close()
+		return nil, fmt.Errorf("iterate direct orders by city: %w", err)
+	}
+	cityRows.Close()
+
+	thicknessRows, err := r.db.Query(ctx, fmt.Sprintf(`
+		SELECT %s AS label,
+		       COUNT(DISTINCT o.order_id) AS count
+		FROM direct_orders o
+		INNER JOIN direct_order_items doi ON doi.order_id = o.order_id
+		%s
+		GROUP BY 1
+		ORDER BY count DESC, label ASC
+	`, normalizedThicknessCase("doi.thickness"), baseWhere), baseArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query direct orders by thickness: %w", err)
+	}
+	for thicknessRows.Next() {
+		var slice models.AnalyticsChartSlice
+		if err := thicknessRows.Scan(&slice.Label, &slice.Count); err != nil {
+			thicknessRows.Close()
+			return nil, fmt.Errorf("scan direct orders by thickness: %w", err)
+		}
+		response.OrdersByThickness = append(response.OrdersByThickness, slice)
+	}
+	if err := thicknessRows.Err(); err != nil {
+		thicknessRows.Close()
+		return nil, fmt.Errorf("iterate direct orders by thickness: %w", err)
+	}
+	thicknessRows.Close()
+
+	stateConditions, stateArgs, _ := buildDirectOrderDashboardConditions(filters, "o", 1)
+	stateWhere := appendWhereCondition(buildWhereClause(stateConditions), "COALESCE(NULLIF(BTRIM(o.state), ''), '') <> ''")
+	if response.AvailableStates, err = queryExecutiveStringList(ctx, r.db, fmt.Sprintf(`
+		SELECT DISTINCT BTRIM(o.state)
+		FROM direct_orders o
+		%s
+		ORDER BY 1
+	`, stateWhere), stateArgs...); err != nil {
+		return nil, fmt.Errorf("query direct available states: %w", err)
+	}
+
+	cityConditions, cityArgs, _ := buildDirectOrderDashboardConditions(filters, "o", 1)
+	cityWhere := appendWhereCondition(buildWhereClause(cityConditions), "COALESCE(NULLIF(BTRIM(o.city), ''), '') <> ''")
+	if response.AvailableCities, err = queryExecutiveStringList(ctx, r.db, fmt.Sprintf(`
+		SELECT DISTINCT BTRIM(o.city)
+		FROM direct_orders o
+		%s
+		ORDER BY 1
+	`, cityWhere), cityArgs...); err != nil {
+		return nil, fmt.Errorf("query direct available cities: %w", err)
+	}
+
+	response.OrdersByState = topChartSlices(response.OrdersByState, 10)
+	response.OrdersByCity = topChartSlices(response.OrdersByCity, 10)
+	response.OrdersByThickness = topChartSlices(response.OrdersByThickness, 10)
+
+	return response, nil
 }
 
 func nullableDate(value *string) interface{} {

@@ -109,6 +109,35 @@ func (h *DirectOrderHandler) GetNextDirectOrderID(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"order_id": nextID})
 }
 
+func (h *DirectOrderHandler) LookupDelhiveryPincode(c *gin.Context) {
+	pincode := strings.TrimSpace(c.Query("pincode"))
+	if pincode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "pincode is required"})
+		return
+	}
+	if !directOrderPincodePattern.MatchString(pincode) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "pincode must be exactly 6 digits"})
+		return
+	}
+	if h.delhiveryClient == nil || !h.delhiveryClient.Enabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Delhivery integration is not configured. Set DELHIVERY_API_TOKEN in the backend environment and restart the service"})
+		return
+	}
+
+	result, err := h.delhiveryClient.LookupPincode(c.Request.Context(), pincode)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no delhivery pincode data found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		log.Printf("❌ Delhivery pincode lookup failed (pincode=%s): %v", pincode, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *DirectOrderHandler) UpdateDirectOrder(c *gin.Context) {
 	orderID := c.Param("order_id")
 	var req models.UpdateDirectOrderRequest
@@ -182,6 +211,40 @@ func (h *DirectOrderHandler) ListDirectOrders(c *gin.Context) {
 		"total":       total,
 		"total_pages": totalPages,
 	})
+}
+
+func (h *DirectOrderHandler) GetExecutiveDashboard(c *gin.Context) {
+	log.Printf("📊 Direct order executive dashboard requested")
+
+	fromDate, toDate, dateRange, err := resolveExecutiveDateRange(
+		c.DefaultQuery("date_range", "last_30_days"),
+		c.Query("from_date"),
+		c.Query("to_date"),
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	filters := models.ExecutiveDashboardFilters{
+		DateRange:   dateRange,
+		FromDate:    fromDate,
+		ToDate:      toDate,
+		State:       strings.TrimSpace(c.Query("state")),
+		City:        strings.TrimSpace(c.Query("city")),
+		Thickness:   strings.TrimSpace(c.Query("thickness")),
+		OrderStatus: strings.TrimSpace(c.Query("order_status")),
+	}
+
+	response, err := h.repo.GetExecutiveDashboard(c.Request.Context(), filters)
+	if err != nil {
+		log.Printf("❌ Direct order executive dashboard failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	log.Printf("✅ Direct order executive dashboard completed")
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *DirectOrderHandler) SearchDirectOrders(c *gin.Context) {
@@ -441,6 +504,12 @@ func resolveDirectOrderError(err error) string {
 
 var directOrderMobilePattern = regexp.MustCompile(`^\d{10}$`)
 var directOrderPincodePattern = regexp.MustCompile(`^\d{6}$`)
+var directOrderStatusesRequiringIssues = map[string]struct{}{
+	"cancelled":    {},
+	"on-hold":      {},
+	"other-issues": {},
+	"returned":     {},
+}
 
 func validateDirectOrderPayloadForCreate(req *models.CreateDirectOrderRequest) error {
 	issues := validateDirectOrderFields(
@@ -534,17 +603,22 @@ func validateDirectOrderPayloadForUpdate(existing *models.DirectOrder, req *mode
 	items := make([]models.CreateDirectOrderItemRequest, 0, len(existing.Items))
 	for _, item := range existing.Items {
 		items = append(items, models.CreateDirectOrderItemRequest{
-			Item:      nullStringToPtr(item.Item),
-			Quantity:  item.Quantity,
-			Dimension: nullStringToPtr(item.Dimension),
-			Thickness: nullStringToPtr(item.Thickness),
-			Weight:    nullFloatToPtr(item.Weight),
-			Amount:    nullFloatToPtr(item.Amount),
-			Remark:    nullStringToPtr(item.Remark),
-			SKU:       nullStringToPtr(item.SKU),
-			HSN:       nullStringToPtr(item.HSN),
-			UnitPrice: nullFloatToPtr(item.UnitPrice),
-			TaxRate:   nullFloatToPtr(item.TaxRate),
+			Item:                 nullStringToPtr(item.Item),
+			Quantity:             item.Quantity,
+			Dimension:            nullStringToPtr(item.Dimension),
+			Thickness:            nullStringToPtr(item.Thickness),
+			Weight:               nullFloatToPtr(item.Weight),
+			Amount:               nullFloatToPtr(item.Amount),
+			Remark:               nullStringToPtr(item.Remark),
+			SKU:                  nullStringToPtr(item.SKU),
+			HSN:                  nullStringToPtr(item.HSN),
+			UnitPrice:            nullFloatToPtr(item.UnitPrice),
+			TaxRate:              nullFloatToPtr(item.TaxRate),
+			CustomerWidthInches:  nullFloatToPtr(item.CustomerWidthInches),
+			CustomerLengthInches: nullFloatToPtr(item.CustomerLengthInches),
+			CustomerWidthMM:      nullFloatToPtr(item.CustomerWidthMM),
+			CustomerLengthMM:     nullFloatToPtr(item.CustomerLengthMM),
+			CornerRadiusAndNotes: nullStringToPtr(item.CornerRadiusAndNotes),
 		})
 	}
 	if req.Items != nil {
@@ -646,8 +720,8 @@ func validateDirectOrderFields(
 		validationIssues = append(validationIssues, "Height cannot be negative")
 	}
 
-	if strings.TrimSpace(orderStatus) == "other-issues" && (issues == nil || strings.TrimSpace(*issues) == "") {
-		validationIssues = append(validationIssues, "Issues field is required when order status is other-issues")
+	if _, requiresIssues := directOrderStatusesRequiringIssues[strings.TrimSpace(orderStatus)]; requiresIssues && (issues == nil || strings.TrimSpace(*issues) == "") {
+		validationIssues = append(validationIssues, "Issues field is required when order status is cancelled, on-hold, other-issues, or returned")
 	}
 
 	for index, item := range items {
@@ -666,6 +740,18 @@ func validateDirectOrderFields(
 		}
 		if item.TaxRate != nil && *item.TaxRate < 0 {
 			validationIssues = append(validationIssues, fmt.Sprintf("Item %d tax rate cannot be negative", itemNumber))
+		}
+		if item.CustomerWidthInches != nil && *item.CustomerWidthInches < 0 {
+			validationIssues = append(validationIssues, fmt.Sprintf("Item %d customer width in inches cannot be negative", itemNumber))
+		}
+		if item.CustomerLengthInches != nil && *item.CustomerLengthInches < 0 {
+			validationIssues = append(validationIssues, fmt.Sprintf("Item %d customer length in inches cannot be negative", itemNumber))
+		}
+		if item.CustomerWidthMM != nil && *item.CustomerWidthMM < 0 {
+			validationIssues = append(validationIssues, fmt.Sprintf("Item %d customer width in mm cannot be negative", itemNumber))
+		}
+		if item.CustomerLengthMM != nil && *item.CustomerLengthMM < 0 {
+			validationIssues = append(validationIssues, fmt.Sprintf("Item %d customer length in mm cannot be negative", itemNumber))
 		}
 	}
 

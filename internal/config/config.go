@@ -30,6 +30,12 @@ type Config struct {
 	DefaultAdminEmail              string
 	PGDumpPath                     string
 	DBBackupLocalDir               string
+	InteraktEnabled                bool
+	InteraktAPIBaseURL             string
+	InteraktAPIKey                 string
+	InteraktMode                   string
+	InteraktTestNumber             string
+	InteraktTemplateName           string
 }
 
 func Load() *Config {
@@ -49,6 +55,13 @@ func Load() *Config {
 	if val := os.Getenv("JWT_EXPIRATION_HOURS"); val != "" {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			jwtExpiration = parsed
+		}
+	}
+
+	interaktEnabled := false
+	if val := os.Getenv("INTERAKT_ENABLED"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			interaktEnabled = parsed
 		}
 	}
 
@@ -73,6 +86,12 @@ func Load() *Config {
 		DefaultAdminEmail:              getEnv("DEFAULT_ADMIN_EMAIL", "admin@example.com"),
 		PGDumpPath:                     getEnv("PG_DUMP_PATH", "pg_dump"),
 		DBBackupLocalDir:               getEnv("DB_BACKUP_LOCAL_DIR", "./backups"),
+		InteraktEnabled:                interaktEnabled,
+		InteraktAPIBaseURL:             getEnv("INTERAKT_API_BASE_URL", "https://api.interakt.ai"),
+		InteraktAPIKey:                 getEnv("INTERAKT_API_KEY", ""),
+		InteraktMode:                   getEnv("INTERAKT_MODE", "prod"), // test or prod
+		InteraktTestNumber:             getEnv("INTERAKT_TEST_NUMBER", ""),
+		InteraktTemplateName:           getEnv("INTERAKT_TEMPLATE_NAME", "amzmrclearorderconfirmation_v2"),
 	}
 }
 

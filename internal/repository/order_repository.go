@@ -13,17 +13,16 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/sathishkumar-nce/amz-orders/internal/integrations/googlesheets"
+	"github.com/sathishkumar-nce/amz-orders/internal/integrations/interakt"
 	"github.com/sathishkumar-nce/amz-orders/internal/models"
 	"github.com/sathishkumar-nce/amz-orders/internal/utils"
 )
 
 type OrderRepository struct {
-	pool         *pgxpool.Pool
-	sheetsClient *googlesheets.Client
+	pool           *pgxpool.Pool
+	interaktClient *interakt.Client
 }
 
-const googleSheetsCountryCode = "91"
 const analyticsISTOffsetSeconds = 5*60*60 + 30*60
 
 type analyticsPeriod struct {
@@ -103,8 +102,8 @@ type executiveRecentActivityRow struct {
 
 func NewOrderRepository(pool *pgxpool.Pool) *OrderRepository {
 	return &OrderRepository{
-		pool:         pool,
-		sheetsClient: nil,
+		pool:           pool,
+		interaktClient: nil,
 	}
 }
 
@@ -2846,9 +2845,9 @@ func (r *OrderRepository) GetRepeatCustomers(ctx context.Context, returnsOnly bo
 	return response, nil
 }
 
-// SetGoogleSheetsClient sets the Google Sheets client (optional)
-func (r *OrderRepository) SetGoogleSheetsClient(client *googlesheets.Client) {
-	r.sheetsClient = client
+// SetInteraktClient sets the Interakt client used for new-order WhatsApp sends.
+func (r *OrderRepository) SetInteraktClient(client *interakt.Client) {
+	r.interaktClient = client
 }
 
 // UpsertOrder inserts or updates an order with its products in a transaction
@@ -2877,7 +2876,7 @@ func (r *OrderRepository) UpsertOrder(ctx context.Context, order *models.AmazonO
 		return err
 	}
 	if !orderInserted {
-		log.Printf("ℹ️  Amazon order %s already existed; insert skipped by ON CONFLICT", order.AmazonOrderID)
+		log.Printf("ℹ️  Amazon order %s already existed; ON CONFLICT updated the existing row", order.AmazonOrderID)
 	}
 
 	// Upsert products
@@ -2901,74 +2900,50 @@ func (r *OrderRepository) UpsertOrder(ctx context.Context, order *models.AmazonO
 		log.Printf("⚠️  Failed to backfill derived dimensions during upsert for order %s: %v", order.AmazonOrderID, err)
 	}
 
-	// Sync to Google Sheets if this is a new order and client is configured
-	if isNewOrder && r.sheetsClient != nil {
-		if err := r.syncToGoogleSheets(ctx, order, products); err != nil {
+	// Send WhatsApp message only for freshly inserted orders if Interakt is enabled.
+	switch {
+	case !orderInserted:
+		log.Printf("ℹ️  Interakt send skipped for Amazon order %s because this upsert updated an existing order", order.AmazonOrderID)
+	case r.interaktClient == nil:
+		log.Printf("ℹ️  Interakt send skipped for Amazon order %s because Interakt client is not configured", order.AmazonOrderID)
+	case !r.interaktClient.Enabled():
+		log.Printf("ℹ️  Interakt send skipped for Amazon order %s because Interakt is disabled", order.AmazonOrderID)
+	default:
+		if err := r.sendOrderConfirmationWhatsApp(ctx, order, products); err != nil {
 			// Log error but don't fail the transaction
-			log.Printf("⚠️  Failed to sync order %s to Google Sheets: %v", order.AmazonOrderID, err)
+			log.Printf("⚠️  Failed to send WhatsApp message for order %s: %v", order.AmazonOrderID, err)
 		}
 	}
 
 	return nil
 }
 
-// syncToGoogleSheets sends order data to Google Sheets
-func (r *OrderRepository) syncToGoogleSheets(ctx context.Context, order *models.AmazonOrder, products []models.OrderProduct) error {
-	// Extract customer name from delivery_fullname
+// sendOrderConfirmationWhatsApp sends the new-order WhatsApp message via Interakt.
+func (r *OrderRepository) sendOrderConfirmationWhatsApp(ctx context.Context, order *models.AmazonOrder, products []models.OrderProduct) error {
 	customerName := ""
 	if order.DeliveryFullname.Valid {
 		customerName = order.DeliveryFullname.String
 	}
 
-	// Clean the phone number, but always use India country code in Sheets.
 	phone := ""
 	if order.Phone.Valid {
 		phone = order.Phone.String
 	}
-	_, cleanPhone := googlesheets.ParsePhoneNumber(phone)
 
-	// Format address
-	address := googlesheets.FormatAddress(
-		nullStringValue(order.DeliveryFullname),
-		nullStringValue(order.DeliveryAddress),
-		nullStringValue(order.DeliveryCity),
-		nullStringValue(order.DeliveryState),
-		nullStringValue(order.DeliveryPostcode),
-		nullStringValue(order.DeliveryCountry),
-	)
-
-	// Format order details with SKU dimensions
-	orderDetails := googlesheets.FormatOrderDetails(products)
-
-	// Get all SKUs
-	skus := googlesheets.GetAllSKUs(products)
-
-	// Build row: [Name, Country Code, Phone, Order ID, Address, Order Details, SKU]
-	row := []interface{}{
-		customerName,            // Column 1: Name
-		googleSheetsCountryCode, // Column 2: Country Code
-		cleanPhone,              // Column 3: Phone Number
-		order.AmazonOrderID,     // Column 4: Order ID
-		address,                 // Column 5: Address
-		orderDetails,            // Column 6: Order Details
-		skus,                    // Column 7: SKU
+	orderDetails := utils.FormatOrderDetails(products)
+	_, err := r.interaktClient.SendOrderMessage(ctx, interakt.SendOrderMessageRequest{
+		CustomerName: customerName,
+		OrderID:      order.AmazonOrderID,
+		OrderDetails: orderDetails,
+		PhoneNumber:  phone,
+		CallbackData: order.AmazonOrderID,
+	})
+	if err != nil {
+		return fmt.Errorf("send order confirmation via Interakt: %w", err)
 	}
 
-	// Append to Google Sheets
-	if err := r.sheetsClient.AppendRow(ctx, row); err != nil {
-		return fmt.Errorf("failed to append row to Google Sheets: %w", err)
-	}
-
-	log.Printf("✅ Synced order %s to Google Sheets", order.AmazonOrderID)
+	log.Printf("✅ Order-level Interakt workflow completed for order %s", order.AmazonOrderID)
 	return nil
-}
-
-// Helper function to safely get null string value
-func nullStringValue(ns sql.NullString) string {
-	if ns.Valid {
-		return ns.String
-	}
-	return ""
 }
 
 func (r *OrderRepository) upsertOrderTx(ctx context.Context, tx pgx.Tx, order *models.AmazonOrder) (bool, error) {
@@ -3070,9 +3045,11 @@ func (r *OrderRepository) upsertOrderTx(ctx context.Context, tx pgx.Tx, order *m
 			main_tax_rate = EXCLUDED.main_tax_rate,
 			main_quantity = EXCLUDED.main_quantity,
 			updated_at = NOW()
+		RETURNING (xmax = 0) AS inserted
 	`
 
-	tag, err := tx.Exec(ctx, query,
+	var inserted bool
+	err := tx.QueryRow(ctx, query,
 		order.AmazonOrderID, order.BaseLinkerOrderID, order.ShopOrderID,
 		order.OrderSource, order.OrderSourceID, order.OrderSourceInfo,
 		order.OrderStatusID, order.Confirmed, order.DateConfirmed, order.DateAdd, order.DateInStatus,
@@ -3096,13 +3073,13 @@ func (r *OrderRepository) upsertOrderTx(ctx context.Context, tx pgx.Tx, order *m
 		order.DefaultWidthInMM, order.DefaultLengthInMM,
 		order.Priority, order.IsRound, order.OrderStatus,
 		nil, // raw_payload will be set from original JSON
-	)
+	).Scan(&inserted)
 
 	if err != nil {
 		return false, fmt.Errorf("insert amazon_orders failed for %s: %w", order.AmazonOrderID, err)
 	}
 
-	return tag.RowsAffected() > 0, nil
+	return inserted, nil
 }
 
 func (r *OrderRepository) upsertProductTx(ctx context.Context, tx pgx.Tx, product *models.OrderProduct) (bool, error) {

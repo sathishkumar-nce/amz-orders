@@ -7,7 +7,7 @@ import (
 	"github.com/sathishkumar-nce/amz-orders/internal/middleware"
 )
 
-func SetupRouter(orderHandler *handlers.OrderHandler, authHandler *handlers.AuthHandler, skuHandler *handlers.SKUHandler, priorityRuleHandler *handlers.PriorityRuleHandler, dbBackupHandler *handlers.DBBackupHandler, directOrderHandler *handlers.DirectOrderHandler, shippingDateFilterHandler *handlers.ShippingDateFilterHandler, amazonRowHighlightRuleHandler *handlers.AmazonRowHighlightRuleHandler, cfg *config.Config) *gin.Engine {
+func SetupRouter(orderHandler *handlers.OrderHandler, authHandler *handlers.AuthHandler, skuHandler *handlers.SKUHandler, priorityRuleHandler *handlers.PriorityRuleHandler, dbBackupHandler *handlers.DBBackupHandler, directOrderHandler *handlers.DirectOrderHandler, shippingDateFilterHandler *handlers.ShippingDateFilterHandler, amazonRowHighlightRuleHandler *handlers.AmazonRowHighlightRuleHandler, interaktSettingsHandler *handlers.InteraktSettingsHandler, cfg *config.Config) *gin.Engine {
 	router := gin.New()
 
 	// Middleware
@@ -101,11 +101,19 @@ func SetupRouter(orderHandler *handlers.OrderHandler, authHandler *handlers.Auth
 				rowHighlightRules.POST("/reset", amazonRowHighlightRuleHandler.ResetDefaults)
 			}
 
+			interaktSettings := protected.Group("/interakt-settings")
+			{
+				interaktSettings.GET("", interaktSettingsHandler.Get)
+				interaktSettings.PUT("", interaktSettingsHandler.Update)
+			}
+
 			directOrders := protected.Group("/direct-orders")
 			{
 				directOrders.GET("", directOrderHandler.ListDirectOrders)
 				directOrders.GET("/search", directOrderHandler.SearchDirectOrders)
+				directOrders.GET("/dashboard/executive", directOrderHandler.GetExecutiveDashboard)
 				directOrders.GET("/next-order-id", directOrderHandler.GetNextDirectOrderID)
+				directOrders.GET("/delhivery/pincode-lookup", directOrderHandler.LookupDelhiveryPincode)
 				directOrders.GET("/export", directOrderHandler.ExportDirectOrdersCSV)
 				directOrders.POST("", directOrderHandler.CreateDirectOrder)
 				directOrders.POST("/delhivery/forward-orders/bulk", directOrderHandler.CreateDelhiveryForwardOrdersBulk)

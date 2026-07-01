@@ -14,7 +14,8 @@ import (
 	"github.com/sathishkumar-nce/amz-orders/internal/handlers"
 	"github.com/sathishkumar-nce/amz-orders/internal/integrations/baselinker"
 	"github.com/sathishkumar-nce/amz-orders/internal/integrations/delhivery"
-	"github.com/sathishkumar-nce/amz-orders/internal/integrations/googlesheets"
+	"github.com/sathishkumar-nce/amz-orders/internal/integrations/interakt"
+	"github.com/sathishkumar-nce/amz-orders/internal/models"
 	"github.com/sathishkumar-nce/amz-orders/internal/repository"
 	"github.com/sathishkumar-nce/amz-orders/internal/router"
 	"github.com/sathishkumar-nce/amz-orders/internal/scheduler"
@@ -57,6 +58,7 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	shippingDateFilterRepo := repository.NewShippingDateFilterRepository(pool)
 	rowHighlightRuleRepo := repository.NewAmazonRowHighlightRuleRepository(pool)
+	interaktSettingsRepo := repository.NewInteraktSettingsRepository(pool)
 
 	if err := userRepo.EnsureDefaultAdmin(
 		ctx,
@@ -67,23 +69,35 @@ func main() {
 		log.Fatalf("Failed to ensure default admin user: %v", err)
 	}
 
-	// Initialize Google Sheets client (optional)
-	sheetsCredFile := os.Getenv("GOOGLE_SHEETS_CREDENTIALS")
-	if sheetsCredFile == "" {
-		sheetsCredFile = "./spreadsheet.json" // Default path
+	// Initialize Interakt WhatsApp client (optional)
+	interaktClient, err := interakt.NewClient(interakt.Config{
+		BaseURL:      cfg.InteraktAPIBaseURL,
+		APIKey:       cfg.InteraktAPIKey,
+		Enabled:      cfg.InteraktEnabled,
+		Mode:         cfg.InteraktMode,
+		TestNumber:   cfg.InteraktTestNumber,
+		TemplateName: cfg.InteraktTemplateName,
+	})
+	if interaktClient != nil {
+		orderRepo.SetInteraktClient(interaktClient)
 	}
-	sheetsID := os.Getenv("GOOGLE_SHEETS_ID")
-	if sheetsID == "" {
-		sheetsID = "1Lzk8ceP5GZ8ePRQVjVX6Nqt676N9-6i_Drcry5emfjE" // Default sheet ID
+	if err != nil {
+		log.Printf("⚠️  Warning: Failed to initialize Interakt client: %v", err)
+		log.Printf("    Interakt runtime settings can still be updated, but sends will fail until required env values are fixed")
+	} else if interaktClient.Enabled() {
+		log.Printf("✅ Interakt WhatsApp integration enabled (mode: %s)", cfg.InteraktMode)
+	} else {
+		log.Printf("ℹ️  Interakt WhatsApp integration disabled (INTERAKT_ENABLED=false)")
 	}
 
-	sheetsClient, err := googlesheets.NewClient(ctx, sheetsCredFile, sheetsID)
-	if err != nil {
-		log.Printf("⚠️  Warning: Failed to initialize Google Sheets client: %v", err)
-		log.Printf("    Orders will not be synced to Google Sheets")
-	} else {
-		orderRepo.SetGoogleSheetsClient(sheetsClient)
-		log.Printf("✅ Google Sheets integration enabled (Sheet ID: %s)", sheetsID)
+	interaktSettingsService := service.NewInteraktSettingsService(interaktSettingsRepo, interaktClient, models.InteraktSettings{
+		Enabled:      cfg.InteraktEnabled,
+		Mode:         cfg.InteraktMode,
+		TemplateName: cfg.InteraktTemplateName,
+		TestNumber:   cfg.InteraktTestNumber,
+	})
+	if _, err := interaktSettingsService.Get(ctx); err != nil {
+		log.Printf("⚠️  Warning: Failed to load Interakt runtime settings: %v", err)
 	}
 
 	// Initialize services and handlers
@@ -102,6 +116,7 @@ func main() {
 	priorityRuleHandler := handlers.NewPriorityRuleHandler(priorityRuleService, orderService)
 	shippingDateFilterHandler := handlers.NewShippingDateFilterHandler(shippingDateFilterService)
 	rowHighlightRuleHandler := handlers.NewAmazonRowHighlightRuleHandler(rowHighlightRuleService)
+	interaktSettingsHandler := handlers.NewInteraktSettingsHandler(interaktSettingsService)
 	dbBackupHandler := handlers.NewDBBackupHandler(dbBackupService)
 	delhiveryClient := delhivery.NewClient(delhivery.Config{
 		BaseURL:               cfg.DelhiveryAPIBaseURL,
@@ -116,7 +131,7 @@ func main() {
 	directOrderHandler := handlers.NewDirectOrderHandler(directOrderRepo, delhiveryClient)
 
 	// Setup router
-	r := router.SetupRouter(orderHandler, authHandler, skuHandler, priorityRuleHandler, dbBackupHandler, directOrderHandler, shippingDateFilterHandler, rowHighlightRuleHandler, cfg)
+	r := router.SetupRouter(orderHandler, authHandler, skuHandler, priorityRuleHandler, dbBackupHandler, directOrderHandler, shippingDateFilterHandler, rowHighlightRuleHandler, interaktSettingsHandler, cfg)
 
 	// Create HTTP server
 	srv := &http.Server{

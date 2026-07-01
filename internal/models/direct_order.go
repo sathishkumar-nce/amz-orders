@@ -56,22 +56,27 @@ type DirectOrder struct {
 
 // DirectOrderItem represents the direct_order_items table.
 type DirectOrderItem struct {
-	ID        int64           `json:"id"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	OrderID   string          `json:"order_id"`
-	Item      sql.NullString  `json:"item,omitempty"`
-	Quantity  int             `json:"quantity"`
-	Dimension sql.NullString  `json:"dimension,omitempty"`
-	Thickness sql.NullString  `json:"thickness,omitempty"`
-	Weight    sql.NullFloat64 `json:"weight,omitempty"`
-	Amount    sql.NullFloat64 `json:"amount,omitempty"`
-	Remark    sql.NullString  `json:"remark,omitempty"`
-	UpdatedBy sql.NullString  `json:"updated_by,omitempty"`
-	SKU       sql.NullString  `json:"sku,omitempty"`
-	HSN       sql.NullString  `json:"hsn,omitempty"`
-	UnitPrice sql.NullFloat64 `json:"unit_price,omitempty"`
-	TaxRate   sql.NullFloat64 `json:"tax_rate,omitempty"`
+	ID                   int64           `json:"id"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+	OrderID              string          `json:"order_id"`
+	Item                 sql.NullString  `json:"item,omitempty"`
+	Quantity             int             `json:"quantity"`
+	Dimension            sql.NullString  `json:"dimension,omitempty"`
+	Thickness            sql.NullString  `json:"thickness,omitempty"`
+	Weight               sql.NullFloat64 `json:"weight,omitempty"`
+	Amount               sql.NullFloat64 `json:"amount,omitempty"`
+	Remark               sql.NullString  `json:"remark,omitempty"`
+	UpdatedBy            sql.NullString  `json:"updated_by,omitempty"`
+	SKU                  sql.NullString  `json:"sku,omitempty"`
+	HSN                  sql.NullString  `json:"hsn,omitempty"`
+	UnitPrice            sql.NullFloat64 `json:"unit_price,omitempty"`
+	TaxRate              sql.NullFloat64 `json:"tax_rate,omitempty"`
+	CustomerWidthInches  sql.NullFloat64 `json:"customer_width_in_inches,omitempty"`
+	CustomerLengthInches sql.NullFloat64 `json:"customer_length_in_inches,omitempty"`
+	CustomerWidthMM      sql.NullFloat64 `json:"customer_width_in_mm,omitempty"`
+	CustomerLengthMM     sql.NullFloat64 `json:"customer_length_in_mm,omitempty"`
+	CornerRadiusAndNotes sql.NullString  `json:"corner_radius_and_notes,omitempty"`
 }
 
 type CreateDirectOrderRequest struct {
@@ -113,17 +118,22 @@ type CreateDirectOrderRequest struct {
 }
 
 type CreateDirectOrderItemRequest struct {
-	Item      *string  `json:"item,omitempty"`
-	Quantity  int      `json:"quantity"`
-	Dimension *string  `json:"dimension,omitempty"`
-	Thickness *string  `json:"thickness,omitempty"`
-	Weight    *float64 `json:"weight,omitempty"`
-	Amount    *float64 `json:"amount,omitempty"`
-	Remark    *string  `json:"remark,omitempty"`
-	SKU       *string  `json:"sku,omitempty"`
-	HSN       *string  `json:"hsn,omitempty"`
-	UnitPrice *float64 `json:"unit_price,omitempty"`
-	TaxRate   *float64 `json:"tax_rate,omitempty"`
+	Item                 *string  `json:"item,omitempty"`
+	Quantity             int      `json:"quantity"`
+	Dimension            *string  `json:"dimension,omitempty"`
+	Thickness            *string  `json:"thickness,omitempty"`
+	Weight               *float64 `json:"weight,omitempty"`
+	Amount               *float64 `json:"amount,omitempty"`
+	Remark               *string  `json:"remark,omitempty"`
+	SKU                  *string  `json:"sku,omitempty"`
+	HSN                  *string  `json:"hsn,omitempty"`
+	UnitPrice            *float64 `json:"unit_price,omitempty"`
+	TaxRate              *float64 `json:"tax_rate,omitempty"`
+	CustomerWidthInches  *float64 `json:"customer_width_in_inches,omitempty"`
+	CustomerLengthInches *float64 `json:"customer_length_in_inches,omitempty"`
+	CustomerWidthMM      *float64 `json:"customer_width_in_mm,omitempty"`
+	CustomerLengthMM     *float64 `json:"customer_length_in_mm,omitempty"`
+	CornerRadiusAndNotes *string  `json:"corner_radius_and_notes,omitempty"`
 }
 
 type UpdateDirectOrderRequest struct {
@@ -202,23 +212,77 @@ type DirectOrderBulkForwardResponse struct {
 	Failures     []DirectOrderBulkForwardItem `json:"failures"`
 }
 
+type DirectOrderPincodeLookupResult struct {
+	Pincode     string                              `json:"pincode"`
+	City        string                              `json:"city,omitempty"`
+	District    string                              `json:"district,omitempty"`
+	State       string                              `json:"state,omitempty"`
+	StateCode   string                              `json:"state_code,omitempty"`
+	Country     string                              `json:"country,omitempty"`
+	Serviceable bool                                `json:"serviceable"`
+	COD         bool                                `json:"cod"`
+	Prepaid     bool                                `json:"prepaid"`
+	Raw         []DirectOrderPincodeLookupCandidate `json:"raw,omitempty"`
+}
+
+type DirectOrderPincodeLookupCandidate struct {
+	Pincode     string `json:"pincode"`
+	City        string `json:"city,omitempty"`
+	District    string `json:"district,omitempty"`
+	State       string `json:"state,omitempty"`
+	StateCode   string `json:"state_code,omitempty"`
+	Country     string `json:"country,omitempty"`
+	Serviceable bool   `json:"serviceable"`
+	COD         bool   `json:"cod"`
+	Prepaid     bool   `json:"prepaid"`
+}
+
+type DirectOrderExecutiveDashboardSummary struct {
+	TotalOrders        int     `json:"total_orders"`
+	ManufacturedOrders int     `json:"manufactured_orders"`
+	OtherIssuesOrders  int     `json:"other_issues_orders"`
+	CancelledOrders    int     `json:"cancelled_orders"`
+	OnHoldOrders       int     `json:"on_hold_orders"`
+	AveragePerDay      float64 `json:"average_per_day"`
+}
+
+type DirectOrderExecutiveDashboardResponse struct {
+	GeneratedAt       time.Time                            `json:"generated_at"`
+	DateRange         string                               `json:"date_range"`
+	RangeStart        string                               `json:"range_start"`
+	RangeEnd          string                               `json:"range_end"`
+	AvailableStates   []string                             `json:"available_states"`
+	AvailableCities   []string                             `json:"available_cities"`
+	Summary           DirectOrderExecutiveDashboardSummary `json:"summary"`
+	OrdersTrend       []AnalyticsTimePoint                 `json:"orders_trend"`
+	OtherIssuesTrend  []AnalyticsTimePoint                 `json:"other_issues_trend"`
+	OrdersByState     []AnalyticsChartSlice                `json:"orders_by_state"`
+	OrdersByCity      []AnalyticsChartSlice                `json:"orders_by_city"`
+	OrdersByThickness []AnalyticsChartSlice                `json:"orders_by_thickness"`
+}
+
 type DirectOrderItemResponse struct {
-	ID        int64    `json:"id"`
-	CreatedAt string   `json:"created_at"`
-	UpdatedAt string   `json:"updated_at"`
-	OrderID   string   `json:"order_id"`
-	Item      *string  `json:"item,omitempty"`
-	Quantity  int      `json:"quantity"`
-	Dimension *string  `json:"dimension,omitempty"`
-	Thickness *string  `json:"thickness,omitempty"`
-	Weight    *float64 `json:"weight,omitempty"`
-	Amount    *float64 `json:"amount,omitempty"`
-	Remark    *string  `json:"remark,omitempty"`
-	UpdatedBy *string  `json:"updated_by,omitempty"`
-	SKU       *string  `json:"sku,omitempty"`
-	HSN       *string  `json:"hsn,omitempty"`
-	UnitPrice *float64 `json:"unit_price,omitempty"`
-	TaxRate   *float64 `json:"tax_rate,omitempty"`
+	ID                   int64    `json:"id"`
+	CreatedAt            string   `json:"created_at"`
+	UpdatedAt            string   `json:"updated_at"`
+	OrderID              string   `json:"order_id"`
+	Item                 *string  `json:"item,omitempty"`
+	Quantity             int      `json:"quantity"`
+	Dimension            *string  `json:"dimension,omitempty"`
+	Thickness            *string  `json:"thickness,omitempty"`
+	Weight               *float64 `json:"weight,omitempty"`
+	Amount               *float64 `json:"amount,omitempty"`
+	Remark               *string  `json:"remark,omitempty"`
+	UpdatedBy            *string  `json:"updated_by,omitempty"`
+	SKU                  *string  `json:"sku,omitempty"`
+	HSN                  *string  `json:"hsn,omitempty"`
+	UnitPrice            *float64 `json:"unit_price,omitempty"`
+	TaxRate              *float64 `json:"tax_rate,omitempty"`
+	CustomerWidthInches  *float64 `json:"customer_width_in_inches,omitempty"`
+	CustomerLengthInches *float64 `json:"customer_length_in_inches,omitempty"`
+	CustomerWidthMM      *float64 `json:"customer_width_in_mm,omitempty"`
+	CustomerLengthMM     *float64 `json:"customer_length_in_mm,omitempty"`
+	CornerRadiusAndNotes *string  `json:"corner_radius_and_notes,omitempty"`
 }
 
 type DirectOrderResponse struct {
@@ -286,22 +350,27 @@ func ToDirectOrderResponse(order *DirectOrder) *DirectOrderResponse {
 	items := make([]DirectOrderItemResponse, 0, len(order.Items))
 	for _, item := range order.Items {
 		items = append(items, DirectOrderItemResponse{
-			ID:        item.ID,
-			CreatedAt: item.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: item.UpdatedAt.Format(time.RFC3339),
-			OrderID:   item.OrderID,
-			Item:      nullStringPtr(item.Item),
-			Quantity:  item.Quantity,
-			Dimension: nullStringPtr(item.Dimension),
-			Thickness: nullStringPtr(item.Thickness),
-			Weight:    nullFloat64Ptr(item.Weight),
-			Amount:    nullFloat64Ptr(item.Amount),
-			Remark:    nullStringPtr(item.Remark),
-			UpdatedBy: nullStringPtr(item.UpdatedBy),
-			SKU:       nullStringPtr(item.SKU),
-			HSN:       nullStringPtr(item.HSN),
-			UnitPrice: nullFloat64Ptr(item.UnitPrice),
-			TaxRate:   nullFloat64Ptr(item.TaxRate),
+			ID:                   item.ID,
+			CreatedAt:            item.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:            item.UpdatedAt.Format(time.RFC3339),
+			OrderID:              item.OrderID,
+			Item:                 nullStringPtr(item.Item),
+			Quantity:             item.Quantity,
+			Dimension:            nullStringPtr(item.Dimension),
+			Thickness:            nullStringPtr(item.Thickness),
+			Weight:               nullFloat64Ptr(item.Weight),
+			Amount:               nullFloat64Ptr(item.Amount),
+			Remark:               nullStringPtr(item.Remark),
+			UpdatedBy:            nullStringPtr(item.UpdatedBy),
+			SKU:                  nullStringPtr(item.SKU),
+			HSN:                  nullStringPtr(item.HSN),
+			UnitPrice:            nullFloat64Ptr(item.UnitPrice),
+			TaxRate:              nullFloat64Ptr(item.TaxRate),
+			CustomerWidthInches:  nullFloat64Ptr(item.CustomerWidthInches),
+			CustomerLengthInches: nullFloat64Ptr(item.CustomerLengthInches),
+			CustomerWidthMM:      nullFloat64Ptr(item.CustomerWidthMM),
+			CustomerLengthMM:     nullFloat64Ptr(item.CustomerLengthMM),
+			CornerRadiusAndNotes: nullStringPtr(item.CornerRadiusAndNotes),
 		})
 	}
 

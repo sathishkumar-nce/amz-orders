@@ -9,6 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +35,7 @@ type Client struct {
 	apiToken   string
 	config     Config
 	httpClient *http.Client
+	stateNames map[string]string
 }
 
 type createOrderPayload struct {
@@ -79,6 +84,13 @@ type createOrderResponse struct {
 	Message string `json:"message"`
 }
 
+type pincodeLookupResponse struct {
+	DeliveryCodes []json.RawMessage `json:"delivery_codes"`
+	PostalCodes   []json.RawMessage `json:"postal_codes"`
+	PinCodes      []json.RawMessage `json:"pin_codes"`
+	Data          []json.RawMessage `json:"data"`
+}
+
 func NewClient(cfg Config) *Client {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if baseURL == "" {
@@ -92,11 +104,94 @@ func NewClient(cfg Config) *Client {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		stateNames: loadStateCodeMap(),
 	}
 }
 
 func (c *Client) Enabled() bool {
 	return c.apiToken != ""
+}
+
+func (c *Client) LookupPincode(ctx context.Context, pincode string) (*models.DirectOrderPincodeLookupResult, error) {
+	if !c.Enabled() {
+		return nil, fmt.Errorf("Delhivery integration is not configured. Set DELHIVERY_API_TOKEN in the backend environment and restart the service")
+	}
+
+	trimmedPincode := strings.TrimSpace(pincode)
+	if trimmedPincode == "" {
+		return nil, fmt.Errorf("pincode is required")
+	}
+
+	endpoint := fmt.Sprintf("%s/c/api/pin-codes/json/?filter_codes=%s", c.baseURL, url.QueryEscape(trimmedPincode))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Token "+c.apiToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("Delhivery pincode lookup failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var decoded pincodeLookupResponse
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("decode Delhivery pincode response: %w", err)
+	}
+
+	entries := decoded.DeliveryCodes
+	if len(entries) == 0 {
+		entries = decoded.PostalCodes
+	}
+	if len(entries) == 0 {
+		entries = decoded.PinCodes
+	}
+	if len(entries) == 0 {
+		entries = decoded.Data
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no Delhivery pincode data found for %s", trimmedPincode)
+	}
+
+	candidates := make([]models.DirectOrderPincodeLookupCandidate, 0, len(entries))
+	for _, entry := range entries {
+		candidate, ok := parsePincodeCandidate(entry)
+		if !ok {
+			continue
+		}
+		if candidate.Pincode == "" {
+			candidate.Pincode = trimmedPincode
+		}
+		c.fillStateName(&candidate)
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no Delhivery pincode data found for %s", trimmedPincode)
+	}
+
+	selected := candidates[0]
+	return &models.DirectOrderPincodeLookupResult{
+		Pincode:     selected.Pincode,
+		City:        selected.City,
+		District:    selected.District,
+		State:       selected.State,
+		StateCode:   selected.StateCode,
+		Country:     fallback(selected.Country, "India"),
+		Serviceable: selected.Serviceable,
+		COD:         selected.COD,
+		Prepaid:     selected.Prepaid,
+		Raw:         candidates,
+	}, nil
 }
 
 func (c *Client) CreateForwardOrder(ctx context.Context, order *models.DirectOrder) (*models.DelhiveryForwardOrderResult, error) {
@@ -363,4 +458,152 @@ func max(value int, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func (c *Client) fillStateName(candidate *models.DirectOrderPincodeLookupCandidate) {
+	if candidate == nil {
+		return
+	}
+	if strings.TrimSpace(candidate.State) != "" {
+		return
+	}
+	code := strings.ToUpper(strings.TrimSpace(candidate.StateCode))
+	if code == "" {
+		return
+	}
+	if stateName, ok := c.stateNames[code]; ok {
+		candidate.State = stateName
+	}
+}
+
+func parsePincodeCandidate(raw json.RawMessage) (models.DirectOrderPincodeLookupCandidate, bool) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return models.DirectOrderPincodeLookupCandidate{}, false
+	}
+
+	normalized := payload
+	if nested, ok := payload["postal_code"].(map[string]interface{}); ok && len(nested) > 0 {
+		normalized = mergeStringMap(payload, nested)
+	}
+
+	candidate := models.DirectOrderPincodeLookupCandidate{
+		Pincode:     firstNonEmptyString(normalized, "pin", "pincode", "postal_code", "postcode"),
+		City:        firstNonEmptyString(normalized, "city", "city_name", "taluk", "location"),
+		District:    firstNonEmptyString(normalized, "district", "district_name"),
+		State:       firstNonEmptyString(normalized, "state", "state_name"),
+		StateCode:   firstNonEmptyString(normalized, "state_code", "st"),
+		Country:     firstNonEmptyString(normalized, "country", "country_name"),
+		Serviceable: firstTruthy(normalized, "serviceable", "is_serviceable"),
+		COD:         firstTruthy(normalized, "cod", "cash", "cash_on_delivery"),
+		Prepaid:     firstTruthy(normalized, "prepaid", "pre_paid"),
+	}
+
+	if !candidate.Serviceable {
+		// Delhivery commonly signals serviceability through COD/prepaid availability.
+		candidate.Serviceable = candidate.COD || candidate.Prepaid || len(normalized) > 0
+	}
+
+	return candidate, candidate.Pincode != "" || candidate.City != "" || candidate.State != "" || candidate.District != ""
+}
+
+func firstNonEmptyString(values map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		raw, ok := values[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch value := raw.(type) {
+		case string:
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				return trimmed
+			}
+		case float64:
+			if value == float64(int64(value)) {
+				return strconv.FormatInt(int64(value), 10)
+			}
+			return strings.TrimSpace(strconv.FormatFloat(value, 'f', -1, 64))
+		case json.Number:
+			return strings.TrimSpace(value.String())
+		}
+	}
+	return ""
+}
+
+func firstTruthy(values map[string]interface{}, keys ...string) bool {
+	for _, key := range keys {
+		raw, ok := values[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch value := raw.(type) {
+		case bool:
+			return value
+		case string:
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "y", "yes", "true", "1":
+				return true
+			case "n", "no", "false", "0":
+				return false
+			}
+		case float64:
+			return value != 0
+		case json.Number:
+			parsed, err := value.Int64()
+			return err == nil && parsed != 0
+		}
+	}
+	return false
+}
+
+func mergeStringMap(base map[string]interface{}, override map[string]interface{}) map[string]interface{} {
+	if len(base) == 0 {
+		return override
+	}
+	merged := make(map[string]interface{}, len(base)+len(override))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range override {
+		merged[key] = value
+	}
+	return merged
+}
+
+func loadStateCodeMap() map[string]string {
+	paths := []string{
+		"state_codes.json",
+		"../state_codes.json",
+	}
+	if _, currentFile, _, ok := runtime.Caller(0); ok {
+		paths = append(paths, filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "state_codes.json"))
+	}
+
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var stateNames map[string]string
+		if err := json.Unmarshal(raw, &stateNames); err != nil {
+			continue
+		}
+
+		normalized := make(map[string]string, len(stateNames))
+		for code, name := range stateNames {
+			trimmedCode := strings.ToUpper(strings.TrimSpace(code))
+			trimmedName := strings.TrimSpace(name)
+			if trimmedCode == "" || trimmedName == "" {
+				continue
+			}
+			normalized[trimmedCode] = trimmedName
+		}
+		if len(normalized) > 0 {
+			return normalized
+		}
+	}
+
+	return map[string]string{}
 }

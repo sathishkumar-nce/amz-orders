@@ -1,0 +1,19 @@
+Header
+Action Required: Plz confirm your Mr.Clear Cover Order
+
+Body
+🎉 Hey {{1}} We just got your Amazon order {{2}} for a custom-made ✨ Mr.Clear transparent table cover!
+
+Here are the details submitted with your order:
+📐 Dimensions: {{3}}
+
+😇 Just to be extra sure we get it right, if your table has any special shape or unique corner style or if it needs a little tweak in design, let us know immediately!
+
+🤔 Not sure how to measure? No worries! Just snap a quick pic 📷 of your table and send it here — our super-friendly team will help you out like pros 👩‍🔧👨‍🔧
+
+✅ If the size submitted in amazon order is correct, you can just sit back and relax. We’ll take it from here!
+
+📝 Already shared your details via email, phone or WhatsApp? please ignore this message.
+
+Big thanks from all of us at
+Team Mr.Clear
