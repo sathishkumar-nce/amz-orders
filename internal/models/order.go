@@ -179,6 +179,21 @@ type UpdateProductManualFieldsRequest struct {
 	IsRound                          *bool    `json:"is_round,omitempty"`
 }
 
+type GetOrdersByIDsRequest struct {
+	AmazonOrderIDs []string `json:"amazon_order_ids" binding:"required,min=1"`
+}
+
+type OrderedAmazonOrderResult struct {
+	RequestedAmazonOrderID string       `json:"requested_amazon_order_id"`
+	Found                  bool         `json:"found"`
+	Order                  *AmazonOrder `json:"order,omitempty"`
+}
+
+type GetOrdersByIDsResponse struct {
+	Results               []OrderedAmazonOrderResult `json:"results"`
+	MissingAmazonOrderIDs []string                   `json:"missing_amazon_order_ids"`
+}
+
 type AnalyticsPeriodStat struct {
 	Key        string  `json:"key"`
 	Label      string  `json:"label"`

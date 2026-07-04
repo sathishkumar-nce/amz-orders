@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -324,6 +325,57 @@ func (s *OrderService) ListOrders(ctx context.Context, filters map[string]interf
 // GetOrderByID returns a single order
 func (s *OrderService) GetOrderByID(ctx context.Context, amazonOrderID string) (*models.AmazonOrder, error) {
 	return s.repo.GetOrderByID(ctx, amazonOrderID)
+}
+
+func (s *OrderService) GetOrdersByIDs(ctx context.Context, amazonOrderIDs []string) (*models.GetOrdersByIDsResponse, error) {
+	results := make([]models.OrderedAmazonOrderResult, 0, len(amazonOrderIDs))
+	missingOrderIDs := make([]string, 0)
+	missingSeen := make(map[string]struct{})
+	cache := make(map[string]*models.AmazonOrder, len(amazonOrderIDs))
+
+	for _, rawID := range amazonOrderIDs {
+		amazonOrderID := strings.TrimSpace(rawID)
+		if amazonOrderID == "" {
+			continue
+		}
+
+		if cached, ok := cache[amazonOrderID]; ok {
+			results = append(results, models.OrderedAmazonOrderResult{
+				RequestedAmazonOrderID: amazonOrderID,
+				Found:                  true,
+				Order:                  cached,
+			})
+			continue
+		}
+
+		order, err := s.repo.GetOrderByID(ctx, amazonOrderID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				results = append(results, models.OrderedAmazonOrderResult{
+					RequestedAmazonOrderID: amazonOrderID,
+					Found:                  false,
+				})
+				if _, seen := missingSeen[amazonOrderID]; !seen {
+					missingSeen[amazonOrderID] = struct{}{}
+					missingOrderIDs = append(missingOrderIDs, amazonOrderID)
+				}
+				continue
+			}
+			return nil, err
+		}
+
+		cache[amazonOrderID] = order
+		results = append(results, models.OrderedAmazonOrderResult{
+			RequestedAmazonOrderID: amazonOrderID,
+			Found:                  true,
+			Order:                  order,
+		})
+	}
+
+	return &models.GetOrdersByIDsResponse{
+		Results:               results,
+		MissingAmazonOrderIDs: missingOrderIDs,
+	}, nil
 }
 
 func (s *OrderService) GetDashboardAnalytics(ctx context.Context, chartWindowDays, missingRiskWindowDays int, dateFrom, dateTo *time.Time) (*models.DashboardAnalytics, error) {

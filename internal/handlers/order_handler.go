@@ -455,6 +455,23 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 	c.JSON(http.StatusOK, order)
 }
 
+func (h *OrderHandler) GetOrdersByIDs(c *gin.Context) {
+	var req models.GetOrdersByIDsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	response, err := h.service.GetOrdersByIDs(c.Request.Context(), req.AmazonOrderIDs)
+	if err != nil {
+		log.Printf("❌ Get orders by ids failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *OrderHandler) GetDashboardAnalytics(c *gin.Context) {
 	log.Printf("📊 Dashboard analytics requested")
 
