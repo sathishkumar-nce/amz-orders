@@ -47,6 +47,7 @@ func SetupRouter(orderHandler *handlers.OrderHandler, authHandler *handlers.Auth
 				orders.POST("/import", orderHandler.ImportFromBaseLinker)
 				orders.POST("/import-sample", orderHandler.ImportFromSampleFile)
 				orders.POST("/by-ids", orderHandler.GetOrdersByIDs)
+				orders.POST("/by-ids/changes", orderHandler.GetChangedOrdersByIDs)
 				orders.GET("", orderHandler.ListOrders)
 				orders.GET("/analytics/dashboard", orderHandler.GetDashboardAnalytics)
 				orders.GET("/analytics/repeat-customers", orderHandler.GetRepeatOrderCustomers)

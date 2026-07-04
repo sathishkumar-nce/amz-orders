@@ -378,6 +378,49 @@ func (s *OrderService) GetOrdersByIDs(ctx context.Context, amazonOrderIDs []stri
 	}, nil
 }
 
+func (s *OrderService) GetChangedOrdersByIDs(ctx context.Context, amazonOrderIDs []string, since time.Time) (*models.GetChangedOrdersByIDsResponse, error) {
+	upperBound := time.Now().UTC()
+
+	changedOrderIDs, missingOrderIDs, err := s.repo.GetChangedOrderIDsByIDsSince(ctx, amazonOrderIDs, since, upperBound)
+	if err != nil {
+		return nil, err
+	}
+
+	changedOrders := make([]models.ChangedAmazonOrderResult, 0, len(changedOrderIDs))
+	cache := make(map[string]*models.AmazonOrder, len(changedOrderIDs))
+
+	for _, amazonOrderID := range changedOrderIDs {
+		if cached, ok := cache[amazonOrderID]; ok {
+			changedOrders = append(changedOrders, models.ChangedAmazonOrderResult{
+				AmazonOrderID: amazonOrderID,
+				Order:         cached,
+			})
+			continue
+		}
+
+		order, err := s.repo.GetOrderByID(ctx, amazonOrderID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				missingOrderIDs = append(missingOrderIDs, amazonOrderID)
+				continue
+			}
+			return nil, err
+		}
+
+		cache[amazonOrderID] = order
+		changedOrders = append(changedOrders, models.ChangedAmazonOrderResult{
+			AmazonOrderID: amazonOrderID,
+			Order:         order,
+		})
+	}
+
+	return &models.GetChangedOrdersByIDsResponse{
+		ChangedOrders:         changedOrders,
+		MissingAmazonOrderIDs: missingOrderIDs,
+		ServerTime:            upperBound,
+	}, nil
+}
+
 func (s *OrderService) GetDashboardAnalytics(ctx context.Context, chartWindowDays, missingRiskWindowDays int, dateFrom, dateTo *time.Time) (*models.DashboardAnalytics, error) {
 	if chartWindowDays <= 0 {
 		chartWindowDays = 30

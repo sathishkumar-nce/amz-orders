@@ -472,6 +472,29 @@ func (h *OrderHandler) GetOrdersByIDs(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *OrderHandler) GetChangedOrdersByIDs(c *gin.Context) {
+	var req models.GetChangedOrdersByIDsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	since, err := parseQueryTime(req.Since)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid since. Use YYYY-MM-DD or RFC3339"})
+		return
+	}
+
+	response, err := h.service.GetChangedOrdersByIDs(c.Request.Context(), req.AmazonOrderIDs, since)
+	if err != nil {
+		log.Printf("❌ Get changed orders by ids failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *OrderHandler) GetDashboardAnalytics(c *gin.Context) {
 	log.Printf("📊 Dashboard analytics requested")
 

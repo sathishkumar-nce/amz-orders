@@ -3774,6 +3774,72 @@ func (r *OrderRepository) GetOrderByID(ctx context.Context, amazonOrderID string
 	return &order, nil
 }
 
+func (r *OrderRepository) GetChangedOrderIDsByIDsSince(ctx context.Context, amazonOrderIDs []string, since time.Time, until time.Time) ([]string, []string, error) {
+	query := `
+		WITH requested AS (
+			SELECT DISTINCT ON (amazon_order_id)
+				amazon_order_id,
+				ord
+			FROM (
+				SELECT NULLIF(BTRIM(id), '') AS amazon_order_id, ord
+				FROM unnest($1::text[]) WITH ORDINALITY AS t(id, ord)
+			) normalized
+			WHERE amazon_order_id IS NOT NULL
+			ORDER BY amazon_order_id, ord
+		),
+		order_updates AS (
+			SELECT
+				r.amazon_order_id,
+				r.ord,
+				o.amazon_order_id IS NULL AS is_missing,
+				GREATEST(
+					COALESCE(o.updated_at, to_timestamp(0)),
+					COALESCE(MAX(p.updated_at), COALESCE(o.updated_at, to_timestamp(0)))
+				) AS latest_updated_at
+			FROM requested r
+			LEFT JOIN amazon_orders o ON o.amazon_order_id = r.amazon_order_id
+			LEFT JOIN amazon_order_products p ON p.amazon_order_id = o.amazon_order_id
+			GROUP BY r.amazon_order_id, r.ord, o.amazon_order_id, o.updated_at
+		)
+		SELECT amazon_order_id, is_missing, latest_updated_at
+		FROM order_updates
+		WHERE is_missing OR (latest_updated_at > $2 AND latest_updated_at <= $3)
+		ORDER BY ord
+	`
+
+	rows, err := r.pool.Query(ctx, query, amazonOrderIDs, since, until)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query changed order ids: %w", err)
+	}
+	defer rows.Close()
+
+	changedOrderIDs := make([]string, 0)
+	missingOrderIDs := make([]string, 0)
+
+	for rows.Next() {
+		var amazonOrderID string
+		var isMissing bool
+		var latestUpdatedAt time.Time
+
+		if err := rows.Scan(&amazonOrderID, &isMissing, &latestUpdatedAt); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan changed order row: %w", err)
+		}
+
+		if isMissing {
+			missingOrderIDs = append(missingOrderIDs, amazonOrderID)
+			continue
+		}
+
+		changedOrderIDs = append(changedOrderIDs, amazonOrderID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("failed to iterate changed order rows: %w", err)
+	}
+
+	return changedOrderIDs, missingOrderIDs, nil
+}
+
 func (r *OrderRepository) backfillDerivedDimensions(ctx context.Context, order *models.AmazonOrder) error {
 	if !order.MainSKU.Valid || order.MainSKU.String == "" {
 		return nil

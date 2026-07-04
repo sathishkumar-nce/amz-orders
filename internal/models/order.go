@@ -194,6 +194,22 @@ type GetOrdersByIDsResponse struct {
 	MissingAmazonOrderIDs []string                   `json:"missing_amazon_order_ids"`
 }
 
+type GetChangedOrdersByIDsRequest struct {
+	AmazonOrderIDs []string `json:"amazon_order_ids" binding:"required,min=1"`
+	Since          string   `json:"since" binding:"required"`
+}
+
+type ChangedAmazonOrderResult struct {
+	AmazonOrderID string       `json:"amazon_order_id"`
+	Order         *AmazonOrder `json:"order,omitempty"`
+}
+
+type GetChangedOrdersByIDsResponse struct {
+	ChangedOrders         []ChangedAmazonOrderResult `json:"changed_orders"`
+	MissingAmazonOrderIDs []string                   `json:"missing_amazon_order_ids"`
+	ServerTime            time.Time                  `json:"server_time"`
+}
+
 type AnalyticsPeriodStat struct {
 	Key        string  `json:"key"`
 	Label      string  `json:"label"`
