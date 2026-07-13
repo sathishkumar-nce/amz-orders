@@ -7,86 +7,88 @@ import (
 
 // AmazonOrder represents the amazon_orders table
 type AmazonOrder struct {
-	AmazonOrderID          string          `json:"amazon_order_id"`
-	BaseLinkerOrderID      int64           `json:"baselinker_order_id"`
-	ShopOrderID            int64           `json:"shop_order_id"`
-	OrderSource            sql.NullString  `json:"order_source,omitempty"`
-	OrderSourceID          sql.NullInt64   `json:"order_source_id,omitempty"`
-	OrderSourceInfo        sql.NullString  `json:"order_source_info,omitempty"`
-	OrderStatusID          int64           `json:"order_status_id"`
-	Confirmed              bool            `json:"confirmed"`
-	DateConfirmed          sql.NullTime    `json:"date_confirmed,omitempty"`
-	DateAdd                sql.NullTime    `json:"date_add,omitempty"`
-	DateInStatus           sql.NullTime    `json:"date_in_status,omitempty"`
-	UserLogin              sql.NullString  `json:"user_login,omitempty"`
-	Phone                  sql.NullString  `json:"phone,omitempty"`
-	Email                  sql.NullString  `json:"email,omitempty"`
-	UserComments           sql.NullString  `json:"user_comments,omitempty"`
-	AdminComments          sql.NullString  `json:"admin_comments,omitempty"`
-	Currency               sql.NullString  `json:"currency,omitempty"`
-	PaymentMethod          sql.NullString  `json:"payment_method,omitempty"`
-	PaymentMethodCOD       sql.NullString  `json:"payment_method_cod,omitempty"`
-	PaymentDone            float64         `json:"payment_done"`
-	DeliveryMethodID       sql.NullInt64   `json:"delivery_method_id,omitempty"`
-	DeliveryMethod         sql.NullString  `json:"delivery_method,omitempty"`
-	DeliveryPrice          float64         `json:"delivery_price"`
-	DeliveryPackageModule  sql.NullString  `json:"delivery_package_module,omitempty"`
-	DeliveryPackageNr      sql.NullString  `json:"delivery_package_nr,omitempty"`
-	DeliveryFullname       sql.NullString  `json:"delivery_fullname,omitempty"`
-	DeliveryCompany        sql.NullString  `json:"delivery_company,omitempty"`
-	DeliveryAddress        sql.NullString  `json:"delivery_address,omitempty"`
-	DeliveryCity           sql.NullString  `json:"delivery_city,omitempty"`
-	DeliveryState          sql.NullString  `json:"delivery_state,omitempty"`
-	DeliveryPostcode       sql.NullString  `json:"delivery_postcode,omitempty"`
-	DeliveryCountryCode    sql.NullString  `json:"delivery_country_code,omitempty"`
-	DeliveryCountry        sql.NullString  `json:"delivery_country,omitempty"`
-	DeliveryPointID        sql.NullString  `json:"delivery_point_id,omitempty"`
-	DeliveryPointName      sql.NullString  `json:"delivery_point_name,omitempty"`
-	DeliveryPointAddress   sql.NullString  `json:"delivery_point_address,omitempty"`
-	DeliveryPointPostcode  sql.NullString  `json:"delivery_point_postcode,omitempty"`
-	DeliveryPointCity      sql.NullString  `json:"delivery_point_city,omitempty"`
-	InvoiceFullname        sql.NullString  `json:"invoice_fullname,omitempty"`
-	InvoiceCompany         sql.NullString  `json:"invoice_company,omitempty"`
-	InvoiceNip             sql.NullString  `json:"invoice_nip,omitempty"`
-	InvoiceAddress         sql.NullString  `json:"invoice_address,omitempty"`
-	InvoiceCity            sql.NullString  `json:"invoice_city,omitempty"`
-	InvoiceState           sql.NullString  `json:"invoice_state,omitempty"`
-	InvoicePostcode        sql.NullString  `json:"invoice_postcode,omitempty"`
-	InvoiceCountryCode     sql.NullString  `json:"invoice_country_code,omitempty"`
-	InvoiceCountry         sql.NullString  `json:"invoice_country,omitempty"`
-	WantInvoice            sql.NullString  `json:"want_invoice,omitempty"`
-	ExtraField1            sql.NullString  `json:"extra_field_1,omitempty"`
-	ExtraField2            sql.NullString  `json:"extra_field_2,omitempty"`
-	OrderPage              sql.NullString  `json:"order_page,omitempty"`
-	PickState              int             `json:"pick_state"`
-	PackState              int             `json:"pack_state"`
-	Star                   int             `json:"star"`
-	CRMClientID            int64           `json:"crm_client_id"`
-	MainOrderProductID     sql.NullInt64   `json:"main_order_product_id,omitempty"`
-	MainProductName        sql.NullString  `json:"main_product_name,omitempty"`
-	MainSKU                sql.NullString  `json:"main_sku,omitempty"`
-	MainASIN               sql.NullString  `json:"main_asin,omitempty"`
-	MainPriceBrutto        sql.NullFloat64 `json:"main_price_brutto,omitempty"`
-	MainTaxRate            sql.NullFloat64 `json:"main_tax_rate,omitempty"`
-	MainQuantity           sql.NullFloat64 `json:"main_quantity,omitempty"`
-	DefaultWidthInInches   sql.NullFloat64 `json:"default_width_in_inches,omitempty"`
-	DefaultLengthInInches  sql.NullFloat64 `json:"default_length_in_inches,omitempty"`
-	CustomerWidthInInches  sql.NullFloat64 `json:"customer_width_in_inches,omitempty"`
-	CustomerLengthInInches sql.NullFloat64 `json:"customer_length_in_inches,omitempty"`
-	DefaultWidthInMM       sql.NullFloat64 `json:"default_width_in_mm,omitempty"`
-	DefaultLengthInMM      sql.NullFloat64 `json:"default_length_in_mm,omitempty"`
-	CustomerWidthInMM      sql.NullFloat64 `json:"customer_width_in_mm,omitempty"`
-	CustomerLengthInMM     sql.NullFloat64 `json:"customer_length_in_mm,omitempty"`
-	CornerRadiusAndNotes   sql.NullString  `json:"corner_radius_and_notes,omitempty"`
-	InternalNotes          sql.NullString  `json:"internal_notes,omitempty"`
-	Priority               string          `json:"priority"`
-	OrderStatus            string          `json:"order_status"`
-	OrderStatusUpdatedAt   sql.NullTime    `json:"order_status_updated_at,omitempty"`
-	IsRound                bool            `json:"is_round"`
-	UpdatedBy              sql.NullString  `json:"updated_by,omitempty"`
-	CreatedAt              time.Time       `json:"created_at"`
-	UpdatedAt              time.Time       `json:"updated_at"`
-	Products               []OrderProduct  `json:"products,omitempty"`
+	AmazonOrderID             string          `json:"amazon_order_id"`
+	BaseLinkerOrderID         int64           `json:"baselinker_order_id"`
+	ShopOrderID               int64           `json:"shop_order_id"`
+	OrderSource               sql.NullString  `json:"order_source,omitempty"`
+	OrderSourceID             sql.NullInt64   `json:"order_source_id,omitempty"`
+	OrderSourceInfo           sql.NullString  `json:"order_source_info,omitempty"`
+	OrderStatusID             int64           `json:"order_status_id"`
+	Confirmed                 bool            `json:"confirmed"`
+	DateConfirmed             sql.NullTime    `json:"date_confirmed,omitempty"`
+	DateAdd                   sql.NullTime    `json:"date_add,omitempty"`
+	DateInStatus              sql.NullTime    `json:"date_in_status,omitempty"`
+	UserLogin                 sql.NullString  `json:"user_login,omitempty"`
+	Phone                     sql.NullString  `json:"phone,omitempty"`
+	Email                     sql.NullString  `json:"email,omitempty"`
+	UserComments              sql.NullString  `json:"user_comments,omitempty"`
+	AdminComments             sql.NullString  `json:"admin_comments,omitempty"`
+	Currency                  sql.NullString  `json:"currency,omitempty"`
+	PaymentMethod             sql.NullString  `json:"payment_method,omitempty"`
+	PaymentMethodCOD          sql.NullString  `json:"payment_method_cod,omitempty"`
+	PaymentDone               float64         `json:"payment_done"`
+	DeliveryMethodID          sql.NullInt64   `json:"delivery_method_id,omitempty"`
+	DeliveryMethod            sql.NullString  `json:"delivery_method,omitempty"`
+	DeliveryPrice             float64         `json:"delivery_price"`
+	DeliveryPackageModule     sql.NullString  `json:"delivery_package_module,omitempty"`
+	DeliveryPackageNr         sql.NullString  `json:"delivery_package_nr,omitempty"`
+	DeliveryFullname          sql.NullString  `json:"delivery_fullname,omitempty"`
+	DeliveryCompany           sql.NullString  `json:"delivery_company,omitempty"`
+	DeliveryAddress           sql.NullString  `json:"delivery_address,omitempty"`
+	DeliveryCity              sql.NullString  `json:"delivery_city,omitempty"`
+	DeliveryState             sql.NullString  `json:"delivery_state,omitempty"`
+	DeliveryPostcode          sql.NullString  `json:"delivery_postcode,omitempty"`
+	DeliveryCountryCode       sql.NullString  `json:"delivery_country_code,omitempty"`
+	DeliveryCountry           sql.NullString  `json:"delivery_country,omitempty"`
+	DeliveryPointID           sql.NullString  `json:"delivery_point_id,omitempty"`
+	DeliveryPointName         sql.NullString  `json:"delivery_point_name,omitempty"`
+	DeliveryPointAddress      sql.NullString  `json:"delivery_point_address,omitempty"`
+	DeliveryPointPostcode     sql.NullString  `json:"delivery_point_postcode,omitempty"`
+	DeliveryPointCity         sql.NullString  `json:"delivery_point_city,omitempty"`
+	InvoiceFullname           sql.NullString  `json:"invoice_fullname,omitempty"`
+	InvoiceCompany            sql.NullString  `json:"invoice_company,omitempty"`
+	InvoiceNip                sql.NullString  `json:"invoice_nip,omitempty"`
+	InvoiceAddress            sql.NullString  `json:"invoice_address,omitempty"`
+	InvoiceCity               sql.NullString  `json:"invoice_city,omitempty"`
+	InvoiceState              sql.NullString  `json:"invoice_state,omitempty"`
+	InvoicePostcode           sql.NullString  `json:"invoice_postcode,omitempty"`
+	InvoiceCountryCode        sql.NullString  `json:"invoice_country_code,omitempty"`
+	InvoiceCountry            sql.NullString  `json:"invoice_country,omitempty"`
+	WantInvoice               sql.NullString  `json:"want_invoice,omitempty"`
+	ExtraField1               sql.NullString  `json:"extra_field_1,omitempty"`
+	ExtraField2               sql.NullString  `json:"extra_field_2,omitempty"`
+	OrderPage                 sql.NullString  `json:"order_page,omitempty"`
+	PickState                 int             `json:"pick_state"`
+	PackState                 int             `json:"pack_state"`
+	Star                      int             `json:"star"`
+	CRMClientID               int64           `json:"crm_client_id"`
+	MainOrderProductID        sql.NullInt64   `json:"main_order_product_id,omitempty"`
+	MainProductName           sql.NullString  `json:"main_product_name,omitempty"`
+	MainSKU                   sql.NullString  `json:"main_sku,omitempty"`
+	MainASIN                  sql.NullString  `json:"main_asin,omitempty"`
+	MainPriceBrutto           sql.NullFloat64 `json:"main_price_brutto,omitempty"`
+	MainTaxRate               sql.NullFloat64 `json:"main_tax_rate,omitempty"`
+	MainQuantity              sql.NullFloat64 `json:"main_quantity,omitempty"`
+	DefaultWidthInInches      sql.NullFloat64 `json:"default_width_in_inches,omitempty"`
+	DefaultLengthInInches     sql.NullFloat64 `json:"default_length_in_inches,omitempty"`
+	CustomerWidthInInches     sql.NullFloat64 `json:"customer_width_in_inches,omitempty"`
+	CustomerLengthInInches    sql.NullFloat64 `json:"customer_length_in_inches,omitempty"`
+	DefaultWidthInMM          sql.NullFloat64 `json:"default_width_in_mm,omitempty"`
+	DefaultLengthInMM         sql.NullFloat64 `json:"default_length_in_mm,omitempty"`
+	CustomerWidthInMM         sql.NullFloat64 `json:"customer_width_in_mm,omitempty"`
+	CustomerLengthInMM        sql.NullFloat64 `json:"customer_length_in_mm,omitempty"`
+	CornerRadiusAndNotes      sql.NullString  `json:"corner_radius_and_notes,omitempty"`
+	InternalNotes             sql.NullString  `json:"internal_notes,omitempty"`
+	Priority                  string          `json:"priority"`
+	OrderStatus               string          `json:"order_status"`
+	OrderStatusUpdatedAt      sql.NullTime    `json:"order_status_updated_at,omitempty"`
+	IsRound                   bool            `json:"is_round"`
+	ReviewConfidence          int             `json:"review_confidence"`
+	ReviewConfidenceUpdatedAt sql.NullTime    `json:"review_confidence_updated_at,omitempty"`
+	UpdatedBy                 sql.NullString  `json:"updated_by,omitempty"`
+	CreatedAt                 time.Time       `json:"created_at"`
+	UpdatedAt                 time.Time       `json:"updated_at"`
+	Products                  []OrderProduct  `json:"products,omitempty"`
 }
 
 // OrderProduct represents the amazon_order_products table
@@ -154,6 +156,66 @@ type UpdateManualFieldsRequest struct {
 	Priority               *string  `json:"priority,omitempty"`
 	OrderStatus            *string  `json:"order_status,omitempty"`
 	IsRound                *bool    `json:"is_round,omitempty"`
+	ReviewConfidence       *int     `json:"review_confidence,omitempty"`
+}
+
+type ReviewFollowupStateSetting struct {
+	StateCode    string `json:"state_code"`
+	StateName    string `json:"state_name"`
+	FollowupDays int    `json:"followup_days"`
+}
+
+type UpdateReviewFollowupSettingsRequest struct {
+	Settings []ReviewFollowupStateSetting `json:"settings" binding:"required,min=1"`
+}
+
+type ReviewFollowupSettingsResponse struct {
+	Settings []ReviewFollowupStateSetting `json:"settings"`
+}
+
+type ReviewQueueItem struct {
+	AmazonOrderID       string    `json:"amazon_order_id"`
+	CustomerName        string    `json:"customer_name"`
+	Phone               string    `json:"phone"`
+	StateCode           string    `json:"state_code"`
+	StateName           string    `json:"state_name"`
+	OrderedAt           time.Time `json:"ordered_at"`
+	ProductName         string    `json:"product_name"`
+	QuantitySummary     string    `json:"quantity_summary"`
+	ThicknessSummary    string    `json:"thickness_summary"`
+	HasRound            bool      `json:"has_round"`
+	HasSpecial          bool      `json:"has_special"`
+	ReviewConfidence    int       `json:"review_confidence"`
+	ReviewRequestStatus string    `json:"review_request_status"`
+	FollowupDays        int       `json:"followup_days"`
+}
+
+type ReviewQueueResponse struct {
+	Data  []ReviewQueueItem `json:"data"`
+	Total int               `json:"total"`
+}
+
+type ReviewQueueFilters struct {
+	States                []string
+	QuantityOperator      string
+	Quantity              *float64
+	ConfidenceOperator    string
+	Confidence            *int
+	IsRound               *bool
+	Thickness             string
+	SpecialOnly           bool
+	ReviewRequestStatuses []string
+	SearchKey             string
+	SearchValue           string
+}
+
+type UpdateReviewRequestStatusRequest struct {
+	AmazonOrderIDs []string `json:"amazon_order_ids" binding:"required,min=1"`
+	Status         string   `json:"status" binding:"required"`
+}
+
+type UpdateReviewRequestStatusResponse struct {
+	UpdatedCount int `json:"updated_count"`
 }
 
 // UpdateProductManualFieldsRequest represents manual product-level field updates

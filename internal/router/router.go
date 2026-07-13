@@ -56,6 +56,15 @@ func SetupRouter(orderHandler *handlers.OrderHandler, authHandler *handlers.Auth
 				orders.PATCH("/:amazon_order_id/products/:order_product_id/manual", orderHandler.UpdateProductManualFields)
 			}
 
+			reviewFollowups := protected.Group("/review-followups")
+			{
+				reviewFollowups.GET("/settings", orderHandler.ListReviewFollowupSettings)
+				reviewFollowups.PUT("/settings", orderHandler.UpdateReviewFollowupSettings)
+				reviewFollowups.POST("/settings/reset", orderHandler.ResetReviewFollowupSettings)
+				reviewFollowups.GET("/queue", orderHandler.ListReviewQueue)
+				reviewFollowups.PATCH("/status", orderHandler.UpdateReviewRequestStatus)
+			}
+
 			// Issues
 			protected.GET("/issues", orderHandler.ListIssues)
 

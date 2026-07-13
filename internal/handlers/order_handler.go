@@ -495,6 +495,164 @@ func (h *OrderHandler) GetChangedOrdersByIDs(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *OrderHandler) ListReviewFollowupSettings(c *gin.Context) {
+	settings, err := h.service.ListReviewFollowupSettings(c.Request.Context())
+	if err != nil {
+		log.Printf("❌ List review followup settings failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ReviewFollowupSettingsResponse{Settings: settings})
+}
+
+func (h *OrderHandler) UpdateReviewFollowupSettings(c *gin.Context) {
+	var req models.UpdateReviewFollowupSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.service.UpdateReviewFollowupSettings(c.Request.Context(), req.Settings); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	settings, err := h.service.ListReviewFollowupSettings(c.Request.Context())
+	if err != nil {
+		log.Printf("❌ Reload review followup settings failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ReviewFollowupSettingsResponse{Settings: settings})
+}
+
+func (h *OrderHandler) ResetReviewFollowupSettings(c *gin.Context) {
+	if err := h.service.ResetReviewFollowupSettings(c.Request.Context()); err != nil {
+		log.Printf("❌ Reset review followup settings failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	settings, err := h.service.ListReviewFollowupSettings(c.Request.Context())
+	if err != nil {
+		log.Printf("❌ Reload review followup settings failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ReviewFollowupSettingsResponse{Settings: settings})
+}
+
+func (h *OrderHandler) ListReviewQueue(c *gin.Context) {
+	filters := models.ReviewQueueFilters{
+		Thickness:   strings.TrimSpace(c.Query("thickness")),
+		SearchKey:   strings.TrimSpace(c.Query("search_key")),
+		SearchValue: strings.TrimSpace(c.Query("search_value")),
+	}
+
+	for _, rawState := range c.QueryArray("state") {
+		for _, part := range strings.Split(rawState, ",") {
+			if state := strings.TrimSpace(part); state != "" {
+				filters.States = append(filters.States, state)
+			}
+		}
+	}
+
+	if operator, ok := parseFilterOperator(c.DefaultQuery("quantity_operator", "gte")); ok {
+		filters.QuantityOperator = operator
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid quantity_operator"})
+		return
+	}
+	if raw := strings.TrimSpace(c.Query("quantity")); raw != "" {
+		quantity, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid quantity"})
+			return
+		}
+		filters.Quantity = &quantity
+	}
+
+	if operator, ok := parseFilterOperator(c.DefaultQuery("confidence_operator", "gte")); ok {
+		filters.ConfidenceOperator = operator
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid confidence_operator"})
+		return
+	}
+	if raw := strings.TrimSpace(c.Query("confidence")); raw != "" {
+		confidence, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid confidence"})
+			return
+		}
+		if confidence < 0 || confidence > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "confidence must be between 0 and 100"})
+			return
+		}
+		filters.Confidence = &confidence
+	}
+
+	if raw := strings.TrimSpace(c.Query("is_round")); raw != "" {
+		isRound, err := strconv.ParseBool(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid is_round"})
+			return
+		}
+		filters.IsRound = &isRound
+	}
+
+	if raw := strings.TrimSpace(c.Query("special")); raw != "" {
+		special, err := strconv.ParseBool(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid special"})
+			return
+		}
+		filters.SpecialOnly = special
+	}
+
+	for _, rawStatus := range c.QueryArray("status") {
+		for _, part := range strings.Split(rawStatus, ",") {
+			if status := strings.TrimSpace(part); status != "" {
+				switch status {
+				case "not-requested", "requested", "received-review":
+				default:
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+					return
+				}
+				filters.ReviewRequestStatuses = append(filters.ReviewRequestStatuses, status)
+			}
+		}
+	}
+
+	response, err := h.service.ListReviewQueue(c.Request.Context(), filters)
+	if err != nil {
+		log.Printf("❌ List review queue failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *OrderHandler) UpdateReviewRequestStatus(c *gin.Context) {
+	var req models.UpdateReviewRequestStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	updatedCount, err := h.service.UpdateReviewRequestStatus(c.Request.Context(), req.AmazonOrderIDs, req.Status, currentActorName(c))
+	if err != nil {
+		log.Printf("❌ Update review request status failed: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.UpdateReviewRequestStatusResponse{UpdatedCount: updatedCount})
+}
+
 func (h *OrderHandler) GetDashboardAnalytics(c *gin.Context) {
 	log.Printf("📊 Dashboard analytics requested")
 

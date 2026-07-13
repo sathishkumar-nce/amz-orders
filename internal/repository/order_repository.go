@@ -230,6 +230,21 @@ func addILikeCondition(whereConditions *[]string, args *[]interface{}, argPos *i
 	*argPos = *argPos + 1
 }
 
+func sqlComparisonOperator(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "gt":
+		return ">"
+	case "gte":
+		return ">="
+	case "lt":
+		return "<"
+	case "lte":
+		return "<="
+	default:
+		return "="
+	}
+}
+
 func (r *OrderRepository) queryChartSlices(ctx context.Context, query string, limit int, args ...interface{}) ([]models.AnalyticsChartSlice, error) {
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -3490,6 +3505,7 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 			o.customer_width_in_mm, o.customer_length_in_mm,
 			o.corner_radius_and_notes, o.is_round,
 			o.priority, o.order_status, o.order_status_updated_at, o.internal_notes, o.updated_by,
+			COALESCE(ri.review_confidence, 0) AS review_confidence, ri.updated_at AS review_confidence_updated_at,
 			COALESCE(
 				json_agg(
 					json_build_object(
@@ -3531,9 +3547,10 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 				'[]'
 			) as products
 		FROM amazon_orders o
+		LEFT JOIN order_review_intents ri ON ri.amazon_order_id = o.amazon_order_id
 		LEFT JOIN amazon_order_products p ON %s
 		%s
-		GROUP BY o.amazon_order_id
+		GROUP BY o.amazon_order_id, ri.review_confidence, ri.updated_at
 		ORDER BY o.date_confirmed DESC NULLS LAST, o.date_add DESC
 		LIMIT $%d OFFSET $%d
 	`, productJoinClause, whereClause, argPos, argPos+1)
@@ -3565,6 +3582,7 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 			&order.CustomerWidthInMM, &order.CustomerLengthInMM,
 			&order.CornerRadiusAndNotes, &order.IsRound,
 			&order.Priority, &order.OrderStatus, &order.OrderStatusUpdatedAt, &order.InternalNotes, &order.UpdatedBy,
+			&order.ReviewConfidence, &order.ReviewConfidenceUpdatedAt,
 			&productsJSON,
 		)
 		if err != nil {
@@ -3720,9 +3738,15 @@ func (r *OrderRepository) GetOrderByID(ctx context.Context, amazonOrderID string
 			default_width_in_mm, default_length_in_mm,
 			customer_width_in_mm, customer_length_in_mm,
 			corner_radius_and_notes,
-			internal_notes, priority, order_status, order_status_updated_at, is_round, updated_by, created_at, updated_at
-		FROM amazon_orders
-		WHERE amazon_order_id = $1
+			internal_notes, priority, order_status, order_status_updated_at, is_round,
+			COALESCE(ri.review_confidence, 0) AS review_confidence, ri.review_updated_at AS review_confidence_updated_at,
+			updated_by, created_at, updated_at
+		FROM amazon_orders o
+		LEFT JOIN (
+			SELECT amazon_order_id AS review_order_id, review_confidence, updated_at AS review_updated_at
+			FROM order_review_intents
+		) ri ON ri.review_order_id = o.amazon_order_id
+		WHERE o.amazon_order_id = $1
 	`
 
 	var order models.AmazonOrder
@@ -3750,7 +3774,9 @@ func (r *OrderRepository) GetOrderByID(ctx context.Context, amazonOrderID string
 		&order.DefaultWidthInMM, &order.DefaultLengthInMM,
 		&order.CustomerWidthInMM, &order.CustomerLengthInMM,
 		&order.CornerRadiusAndNotes,
-		&order.InternalNotes, &order.Priority, &order.OrderStatus, &order.OrderStatusUpdatedAt, &order.IsRound, &order.UpdatedBy, &order.CreatedAt, &order.UpdatedAt,
+		&order.InternalNotes, &order.Priority, &order.OrderStatus, &order.OrderStatusUpdatedAt, &order.IsRound,
+		&order.ReviewConfidence, &order.ReviewConfidenceUpdatedAt,
+		&order.UpdatedBy, &order.CreatedAt, &order.UpdatedAt,
 	)
 
 	if err != nil {
@@ -3794,12 +3820,14 @@ func (r *OrderRepository) GetChangedOrderIDsByIDsSince(ctx context.Context, amaz
 				o.amazon_order_id IS NULL AS is_missing,
 				GREATEST(
 					COALESCE(o.updated_at, to_timestamp(0)),
-					COALESCE(MAX(p.updated_at), COALESCE(o.updated_at, to_timestamp(0)))
+					COALESCE(MAX(p.updated_at), COALESCE(o.updated_at, to_timestamp(0))),
+					COALESCE(ri.updated_at, COALESCE(o.updated_at, to_timestamp(0)))
 				) AS latest_updated_at
 			FROM requested r
 			LEFT JOIN amazon_orders o ON o.amazon_order_id = r.amazon_order_id
 			LEFT JOIN amazon_order_products p ON p.amazon_order_id = o.amazon_order_id
-			GROUP BY r.amazon_order_id, r.ord, o.amazon_order_id, o.updated_at
+			LEFT JOIN order_review_intents ri ON ri.amazon_order_id = o.amazon_order_id
+			GROUP BY r.amazon_order_id, r.ord, o.amazon_order_id, o.updated_at, ri.updated_at
 		)
 		SELECT amazon_order_id, is_missing, latest_updated_at
 		FROM order_updates
@@ -4039,29 +4067,326 @@ func (r *OrderRepository) UpdateManualFields(ctx context.Context, amazonOrderID 
 		argPos++
 	}
 
-	if len(updates) == 0 {
+	if len(updates) == 0 && req.ReviewConfidence == nil {
 		log.Printf("ℹ️  Repository manual field update skipped: no updates provided (amazon_order_id=%s)", amazonOrderID)
 		return r.GetOrderByID(ctx, amazonOrderID)
 	}
 
-	query := fmt.Sprintf(`
-		UPDATE amazon_orders
-		SET %s, updated_by = NULLIF($%d, ''), updated_at = NOW()
-		WHERE amazon_order_id = $%d
-	`, strings.Join(updates, ", "), argPos, argPos+1)
+	if len(updates) > 0 {
+		query := fmt.Sprintf(`
+			UPDATE amazon_orders
+			SET %s, updated_by = NULLIF($%d, ''), updated_at = NOW()
+			WHERE amazon_order_id = $%d
+		`, strings.Join(updates, ", "), argPos, argPos+1)
 
-	args = append(args, actor, amazonOrderID)
-	result, err := r.pool.Exec(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to update manual fields: %w", err)
+		updateArgs := append(args, actor, amazonOrderID)
+		result, err := r.pool.Exec(ctx, query, updateArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update manual fields: %w", err)
+		}
+
+		if result.RowsAffected() == 0 {
+			return nil, sql.ErrNoRows
+		}
 	}
 
-	if result.RowsAffected() == 0 {
-		return nil, sql.ErrNoRows
+	if req.ReviewConfidence != nil {
+		result, err := r.pool.Exec(ctx, `
+			INSERT INTO order_review_intents (amazon_order_id, review_confidence, updated_by, updated_at)
+			SELECT amazon_order_id, $2, NULLIF($3, ''), NOW()
+			FROM amazon_orders
+			WHERE amazon_order_id = $1
+			ON CONFLICT (amazon_order_id) DO UPDATE SET
+				review_confidence = EXCLUDED.review_confidence,
+				updated_by = EXCLUDED.updated_by,
+				updated_at = NOW()
+		`, amazonOrderID, *req.ReviewConfidence, actor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update review confidence: %w", err)
+		}
+		if result.RowsAffected() == 0 {
+			return nil, sql.ErrNoRows
+		}
 	}
+
 	log.Printf("✅ Repository manual field update completed (amazon_order_id=%s updated_fields=%d)", amazonOrderID, len(updates))
 
 	return r.GetOrderByID(ctx, amazonOrderID)
+}
+
+func (r *OrderRepository) ListReviewFollowupSettings(ctx context.Context) ([]models.ReviewFollowupStateSetting, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT state_code, state_name, followup_days
+		FROM review_followup_state_settings
+		ORDER BY state_name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list review followup settings: %w", err)
+	}
+	defer rows.Close()
+
+	settings := make([]models.ReviewFollowupStateSetting, 0)
+	for rows.Next() {
+		var item models.ReviewFollowupStateSetting
+		if err := rows.Scan(&item.StateCode, &item.StateName, &item.FollowupDays); err != nil {
+			return nil, fmt.Errorf("scan review followup setting: %w", err)
+		}
+		settings = append(settings, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate review followup settings: %w", err)
+	}
+
+	return settings, nil
+}
+
+func (r *OrderRepository) UpdateReviewFollowupSettings(ctx context.Context, settings []models.ReviewFollowupStateSetting) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin review followup settings update: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for _, item := range settings {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO review_followup_state_settings (state_code, state_name, followup_days, updated_at)
+			VALUES ($1, $2, $3, NOW())
+			ON CONFLICT (state_code) DO UPDATE SET
+				state_name = EXCLUDED.state_name,
+				followup_days = EXCLUDED.followup_days,
+				updated_at = NOW()
+		`, item.StateCode, item.StateName, item.FollowupDays); err != nil {
+			return fmt.Errorf("upsert review followup setting %s: %w", item.StateCode, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit review followup settings update: %w", err)
+	}
+	return nil
+}
+
+func (r *OrderRepository) ResetReviewFollowupSettings(ctx context.Context) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE review_followup_state_settings
+		SET followup_days = 7, updated_at = NOW()
+	`)
+	if err != nil {
+		return fmt.Errorf("reset review followup settings: %w", err)
+	}
+	return nil
+}
+
+func (r *OrderRepository) ListReviewQueue(ctx context.Context, filters models.ReviewQueueFilters) ([]models.ReviewQueueItem, error) {
+	whereConditions := []string{
+		"COALESCE(o.date_confirmed, o.date_add) IS NOT NULL",
+		"COALESCE(o.date_confirmed, o.date_add) <= NOW() - (s.followup_days * INTERVAL '1 day')",
+		"o.order_status NOT IN ('cancelled', 'returned')",
+	}
+	args := []interface{}{}
+	argPos := 1
+
+	if len(filters.States) > 0 {
+		whereConditions = append(whereConditions, fmt.Sprintf("(LOWER(s.state_code) = ANY($%d::text[]) OR LOWER(s.state_name) = ANY($%d::text[]))", argPos, argPos))
+		normalizedStates := make([]string, 0, len(filters.States))
+		for _, state := range filters.States {
+			trimmed := strings.ToLower(strings.TrimSpace(state))
+			if trimmed != "" {
+				normalizedStates = append(normalizedStates, trimmed)
+			}
+		}
+		args = append(args, normalizedStates)
+		argPos++
+	}
+
+	if filters.Quantity != nil {
+		operator := sqlComparisonOperator(filters.QuantityOperator)
+		whereConditions = append(whereConditions, fmt.Sprintf(`EXISTS (
+			SELECT 1
+			FROM amazon_order_products p_filter
+			WHERE p_filter.amazon_order_id = o.amazon_order_id
+				AND COALESCE(p_filter.is_discount_line, FALSE) = FALSE
+				AND p_filter.quantity %s $%d
+		)`, operator, argPos))
+		args = append(args, *filters.Quantity)
+		argPos++
+	}
+
+	if filters.Confidence != nil {
+		operator := sqlComparisonOperator(filters.ConfidenceOperator)
+		whereConditions = append(whereConditions, fmt.Sprintf("COALESCE(ri.review_confidence, 0) %s $%d", operator, argPos))
+		args = append(args, *filters.Confidence)
+		argPos++
+	}
+
+	if filters.IsRound != nil {
+		whereConditions = append(whereConditions, fmt.Sprintf(`EXISTS (
+			SELECT 1
+			FROM amazon_order_products p_filter
+			WHERE p_filter.amazon_order_id = o.amazon_order_id
+				AND COALESCE(p_filter.is_discount_line, FALSE) = FALSE
+				AND p_filter.is_round = $%d
+		)`, argPos))
+		args = append(args, *filters.IsRound)
+		argPos++
+	}
+
+	if filters.Thickness != "" {
+		whereConditions = append(whereConditions, fmt.Sprintf(`EXISTS (
+			SELECT 1
+			FROM amazon_order_products p_filter
+			WHERE p_filter.amazon_order_id = o.amazon_order_id
+				AND COALESCE(p_filter.is_discount_line, FALSE) = FALSE
+				AND REPLACE(LOWER(COALESCE(p_filter.thickness, '')), ' ', '') ILIKE $%d
+		)`, argPos))
+		args = append(args, "%"+strings.ReplaceAll(strings.ToLower(strings.TrimSpace(filters.Thickness)), " ", "")+"%")
+		argPos++
+	}
+
+	if filters.SpecialOnly {
+		whereConditions = append(whereConditions, `EXISTS (
+			SELECT 1
+			FROM amazon_order_products p_filter
+			WHERE p_filter.amazon_order_id = o.amazon_order_id
+				AND COALESCE(p_filter.is_discount_line, FALSE) = FALSE
+				AND p_filter.corner_radius_and_notes ILIKE '%[special]%'
+		)`)
+	}
+
+	if len(filters.ReviewRequestStatuses) > 0 {
+		normalizedStatuses := make([]string, 0, len(filters.ReviewRequestStatuses))
+		for _, status := range filters.ReviewRequestStatuses {
+			trimmed := strings.ToLower(strings.TrimSpace(status))
+			if trimmed != "" {
+				normalizedStatuses = append(normalizedStatuses, trimmed)
+			}
+		}
+		if len(normalizedStatuses) > 0 {
+			whereConditions = append(whereConditions, fmt.Sprintf("COALESCE(ri.review_request_status, 'not-requested') = ANY($%d::text[])", argPos))
+			args = append(args, normalizedStatuses)
+			argPos++
+		}
+	}
+
+	if filters.SearchValue != "" {
+		pattern := wildcardPattern(filters.SearchValue)
+		switch filters.SearchKey {
+		case "order_id":
+			whereConditions = append(whereConditions, fmt.Sprintf("o.amazon_order_id ILIKE $%d", argPos))
+			args = append(args, pattern)
+			argPos++
+		case "phone":
+			whereConditions = append(whereConditions, fmt.Sprintf("o.phone ILIKE $%d", argPos))
+			args = append(args, pattern)
+			argPos++
+		case "customer":
+			whereConditions = append(whereConditions, fmt.Sprintf("(o.delivery_fullname ILIKE $%d OR o.user_login ILIKE $%d)", argPos, argPos))
+			args = append(args, pattern)
+			argPos++
+		default:
+			whereConditions = append(whereConditions, fmt.Sprintf(`(
+				o.amazon_order_id ILIKE $%d
+				OR o.phone ILIKE $%d
+				OR o.delivery_fullname ILIKE $%d
+				OR o.user_login ILIKE $%d
+			)`, argPos, argPos, argPos, argPos))
+			args = append(args, pattern)
+			argPos++
+		}
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			o.amazon_order_id,
+			COALESCE(NULLIF(BTRIM(o.delivery_fullname), ''), NULLIF(BTRIM(o.user_login), ''), 'Not available') AS customer_name,
+			COALESCE(o.phone, '') AS phone,
+			s.state_code,
+			s.state_name,
+			COALESCE(o.date_confirmed, o.date_add) AS ordered_at,
+			COALESCE(NULLIF(products.product_name, ''), COALESCE(NULLIF(BTRIM(o.main_product_name), ''), 'Not available')) AS product_name,
+			COALESCE(NULLIF(products.quantity_summary, ''), 'Not set') AS quantity_summary,
+			COALESCE(NULLIF(products.thickness_summary, ''), 'Not set') AS thickness_summary,
+			COALESCE(products.has_round, FALSE) AS has_round,
+			COALESCE(products.has_special, FALSE) AS has_special,
+			COALESCE(ri.review_confidence, 0) AS review_confidence,
+			COALESCE(ri.review_request_status, 'not-requested') AS review_request_status,
+			s.followup_days
+		FROM amazon_orders o
+		JOIN review_followup_state_settings s
+			ON LOWER(BTRIM(o.delivery_state)) = LOWER(s.state_name)
+			OR LOWER(BTRIM(o.delivery_state)) = LOWER(s.state_code)
+		LEFT JOIN order_review_intents ri ON ri.amazon_order_id = o.amazon_order_id
+		LEFT JOIN LATERAL (
+			SELECT
+				STRING_AGG(NULLIF(BTRIM(p.name), ''), ', ' ORDER BY p.order_product_id) AS product_name,
+				STRING_AGG(p.quantity::text, ', ' ORDER BY p.order_product_id) FILTER (WHERE p.quantity IS NOT NULL) AS quantity_summary,
+				STRING_AGG(DISTINCT NULLIF(BTRIM(p.thickness), ''), ', ') FILTER (WHERE NULLIF(BTRIM(p.thickness), '') IS NOT NULL) AS thickness_summary,
+				BOOL_OR(COALESCE(p.is_round, FALSE)) AS has_round,
+				BOOL_OR(p.corner_radius_and_notes ILIKE '%%[special]%%') AS has_special
+			FROM amazon_order_products p
+			WHERE p.amazon_order_id = o.amazon_order_id
+				AND COALESCE(p.is_discount_line, FALSE) = FALSE
+		) products ON TRUE
+		WHERE %s
+		ORDER BY
+			DATE_TRUNC('day', COALESCE(o.date_confirmed, o.date_add)) DESC,
+			s.state_name ASC,
+			COALESCE(ri.review_confidence, 0) DESC,
+			COALESCE(o.date_confirmed, o.date_add) DESC
+	`, strings.Join(whereConditions, " AND "))
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list review queue: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.ReviewQueueItem, 0)
+	for rows.Next() {
+		var item models.ReviewQueueItem
+		if err := rows.Scan(
+			&item.AmazonOrderID,
+			&item.CustomerName,
+			&item.Phone,
+			&item.StateCode,
+			&item.StateName,
+			&item.OrderedAt,
+			&item.ProductName,
+			&item.QuantitySummary,
+			&item.ThicknessSummary,
+			&item.HasRound,
+			&item.HasSpecial,
+			&item.ReviewConfidence,
+			&item.ReviewRequestStatus,
+			&item.FollowupDays,
+		); err != nil {
+			return nil, fmt.Errorf("scan review queue item: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate review queue: %w", err)
+	}
+
+	return items, nil
+}
+
+func (r *OrderRepository) UpdateReviewRequestStatus(ctx context.Context, amazonOrderIDs []string, status string, actor string) (int, error) {
+	result, err := r.pool.Exec(ctx, `
+		INSERT INTO order_review_intents (amazon_order_id, review_request_status, updated_by, updated_at)
+		SELECT amazon_order_id, $2, NULLIF($3, ''), NOW()
+		FROM amazon_orders
+		WHERE amazon_order_id = ANY($1::text[])
+		ON CONFLICT (amazon_order_id) DO UPDATE SET
+			review_request_status = EXCLUDED.review_request_status,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = NOW()
+	`, amazonOrderIDs, status, actor)
+	if err != nil {
+		return 0, fmt.Errorf("update review request status: %w", err)
+	}
+
+	return int(result.RowsAffected()), nil
 }
 
 // UpdateProductManualFields updates manual fields for a specific product row.

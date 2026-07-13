@@ -461,12 +461,129 @@ func (s *OrderService) UpdateManualFields(ctx context.Context, amazonOrderID str
 		}
 	}
 
+	if req.ReviewConfidence != nil {
+		if *req.ReviewConfidence < 0 || *req.ReviewConfidence > 100 {
+			return nil, fmt.Errorf("review_confidence must be between 0 and 100")
+		}
+	}
+
 	return s.repo.UpdateManualFields(ctx, amazonOrderID, req, actor)
 }
 
 // UpdateProductManualFields updates product-level manual business fields.
 func (s *OrderService) UpdateProductManualFields(ctx context.Context, amazonOrderID string, orderProductID int64, req *models.UpdateProductManualFieldsRequest, actor string) (*models.AmazonOrder, error) {
 	return s.repo.UpdateProductManualFields(ctx, amazonOrderID, orderProductID, req, actor)
+}
+
+func (s *OrderService) ListReviewFollowupSettings(ctx context.Context) ([]models.ReviewFollowupStateSetting, error) {
+	return s.repo.ListReviewFollowupSettings(ctx)
+}
+
+func (s *OrderService) UpdateReviewFollowupSettings(ctx context.Context, settings []models.ReviewFollowupStateSetting) error {
+	existing, err := s.repo.ListReviewFollowupSettings(ctx)
+	if err != nil {
+		return err
+	}
+
+	allowed := make(map[string]string, len(existing))
+	for _, item := range existing {
+		allowed[item.StateCode] = item.StateName
+	}
+
+	for index := range settings {
+		item := &settings[index]
+		item.StateCode = strings.ToUpper(strings.TrimSpace(item.StateCode))
+		stateName, ok := allowed[item.StateCode]
+		if !ok {
+			return fmt.Errorf("unsupported state_code: %s", item.StateCode)
+		}
+		item.StateName = stateName
+		if item.FollowupDays < 0 || item.FollowupDays > 120 {
+			return fmt.Errorf("followup_days must be between 0 and 120 for %s", item.StateCode)
+		}
+	}
+
+	return s.repo.UpdateReviewFollowupSettings(ctx, settings)
+}
+
+func (s *OrderService) ResetReviewFollowupSettings(ctx context.Context) error {
+	return s.repo.ResetReviewFollowupSettings(ctx)
+}
+
+func (s *OrderService) ListReviewQueue(ctx context.Context, filters models.ReviewQueueFilters) (*models.ReviewQueueResponse, error) {
+	if filters.QuantityOperator == "" {
+		filters.QuantityOperator = "gte"
+	}
+	if filters.ConfidenceOperator == "" {
+		filters.ConfidenceOperator = "gte"
+	}
+	if filters.Quantity != nil && !isValidFilterOperator(filters.QuantityOperator) {
+		return nil, fmt.Errorf("invalid quantity_operator")
+	}
+	if filters.Confidence != nil && !isValidFilterOperator(filters.ConfidenceOperator) {
+		return nil, fmt.Errorf("invalid confidence_operator")
+	}
+	if filters.Confidence != nil && (*filters.Confidence < 0 || *filters.Confidence > 100) {
+		return nil, fmt.Errorf("confidence must be between 0 and 100")
+	}
+	for _, status := range filters.ReviewRequestStatuses {
+		if !isValidReviewRequestStatus(status) {
+			return nil, fmt.Errorf("invalid review request status: %s", status)
+		}
+	}
+
+	items, err := s.repo.ListReviewQueue(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	return &models.ReviewQueueResponse{
+		Data:  items,
+		Total: len(items),
+	}, nil
+}
+
+func (s *OrderService) UpdateReviewRequestStatus(ctx context.Context, amazonOrderIDs []string, status string, actor string) (int, error) {
+	status = strings.TrimSpace(strings.ToLower(status))
+	if !isValidReviewRequestStatus(status) {
+		return 0, fmt.Errorf("invalid status: must be one of: not-requested, requested, received-review")
+	}
+
+	normalizedIDs := make([]string, 0, len(amazonOrderIDs))
+	seen := make(map[string]struct{}, len(amazonOrderIDs))
+	for _, rawID := range amazonOrderIDs {
+		amazonOrderID := strings.TrimSpace(rawID)
+		if amazonOrderID == "" {
+			continue
+		}
+		if _, exists := seen[amazonOrderID]; exists {
+			continue
+		}
+		seen[amazonOrderID] = struct{}{}
+		normalizedIDs = append(normalizedIDs, amazonOrderID)
+	}
+	if len(normalizedIDs) == 0 {
+		return 0, fmt.Errorf("amazon_order_ids is required")
+	}
+
+	return s.repo.UpdateReviewRequestStatus(ctx, normalizedIDs, status, actor)
+}
+
+func isValidFilterOperator(operator string) bool {
+	switch strings.TrimSpace(strings.ToLower(operator)) {
+	case "gt", "gte", "lt", "lte", "eq":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidReviewRequestStatus(status string) bool {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "not-requested", "requested", "received-review":
+		return true
+	default:
+		return false
+	}
 }
 
 func isValidPriority(priority string) bool {
