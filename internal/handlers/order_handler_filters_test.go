@@ -133,3 +133,76 @@ func TestApplySharedListFiltersParsesHasCustomerInputs(t *testing.T) {
 		t.Fatalf("expected has_customer_inputs=true, got %#v", filters["has_customer_inputs"])
 	}
 }
+
+func TestApplyReturnsDefaultFiltersDefaultsToReturnInitiated(t *testing.T) {
+	filters := map[string]interface{}{}
+	applyReturnsDefaultFilters(filters, false)
+
+	if got, ok := filters["return_initiated"].(bool); !ok || !got {
+		t.Fatalf("expected returns default to return_initiated=true, got %#v", filters["return_initiated"])
+	}
+}
+
+func TestApplyReturnsDefaultFiltersKeepsOrderIDSearchUnrestricted(t *testing.T) {
+	filters := map[string]interface{}{
+		"amazon_order_id": "407-1234567-1234567",
+	}
+	applyReturnsDefaultFilters(filters, false)
+
+	if _, ok := filters["return_initiated"]; ok {
+		t.Fatalf("expected order ID search to skip return_initiated default, got %#v", filters["return_initiated"])
+	}
+}
+
+func TestApplyReturnsDefaultFiltersPreservesExplicitReturnInitiated(t *testing.T) {
+	filters := map[string]interface{}{
+		"return_initiated": false,
+	}
+	applyReturnsDefaultFilters(filters, false)
+
+	if got, ok := filters["return_initiated"].(bool); !ok || got {
+		t.Fatalf("expected explicit return_initiated=false to be preserved, got %#v", filters["return_initiated"])
+	}
+}
+
+func TestApplyReturnsDefaultFiltersKeepsSearchUnrestricted(t *testing.T) {
+	filters := map[string]interface{}{
+		"sku": "MRC-MR-0246",
+	}
+	applyReturnsDefaultFilters(filters, true)
+
+	if _, ok := filters["return_initiated"]; ok {
+		t.Fatalf("expected search to skip return_initiated default, got %#v", filters["return_initiated"])
+	}
+}
+
+func TestApplySafetyClaimsDefaultFiltersDefaultsToReturnedOrders(t *testing.T) {
+	filters := map[string]interface{}{}
+	applySafetyClaimsDefaultFilters(filters)
+
+	if got, ok := filters["order_status"].(string); !ok || got != "returned" {
+		t.Fatalf("expected safety claims default to order_status=returned, got %#v", filters["order_status"])
+	}
+}
+
+func TestApplySafetyClaimsDefaultFiltersKeepsOrderIDSearchUnrestricted(t *testing.T) {
+	filters := map[string]interface{}{
+		"amazon_order_id": "407-1234567-1234567",
+	}
+	applySafetyClaimsDefaultFilters(filters)
+
+	if _, ok := filters["order_status"]; ok {
+		t.Fatalf("expected order ID search to skip order_status default, got %#v", filters["order_status"])
+	}
+}
+
+func TestApplySafetyClaimsDefaultFiltersPreservesExplicitOrderStatus(t *testing.T) {
+	filters := map[string]interface{}{
+		"order_status": "manufactured",
+	}
+	applySafetyClaimsDefaultFilters(filters)
+
+	if got, ok := filters["order_status"].(string); !ok || got != "manufactured" {
+		t.Fatalf("expected explicit order_status=manufactured to be preserved, got %#v", filters["order_status"])
+	}
+}

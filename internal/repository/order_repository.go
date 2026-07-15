@@ -3400,6 +3400,18 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 		argPos++
 	}
 
+	if val, ok := filters["is_fresh_roll"].(bool); ok {
+		whereConditions = append(whereConditions, fmt.Sprintf("o.is_fresh_roll = $%d", argPos))
+		args = append(args, val)
+		argPos++
+	}
+
+	if val, ok := filters["is_fresh_roll_addressed"].(bool); ok {
+		whereConditions = append(whereConditions, fmt.Sprintf("o.is_fresh_roll_addressed = $%d", argPos))
+		args = append(args, val)
+		argPos++
+	}
+
 	if val, ok := filters["missing_customer_inputs"].(bool); ok && val {
 		addProductCondition(
 			`p_filter.customer_width_in_inches IS NULL
@@ -3504,7 +3516,9 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 			o.default_width_in_mm, o.default_length_in_mm,
 			o.customer_width_in_mm, o.customer_length_in_mm,
 			o.corner_radius_and_notes, o.is_round,
-			o.priority, o.order_status, o.order_status_updated_at, o.internal_notes, o.updated_by,
+			o.priority, o.order_status, o.order_status_updated_at, o.internal_notes,
+			o.is_fresh_roll, o.is_fresh_roll_addressed, o.fresh_roll_addressed_action,
+			o.updated_by,
 			COALESCE(ri.review_confidence, 0) AS review_confidence, ri.updated_at AS review_confidence_updated_at,
 			COALESCE(
 				json_agg(
@@ -3581,7 +3595,9 @@ func (r *OrderRepository) ListOrders(ctx context.Context, filters map[string]int
 			&order.DefaultWidthInMM, &order.DefaultLengthInMM,
 			&order.CustomerWidthInMM, &order.CustomerLengthInMM,
 			&order.CornerRadiusAndNotes, &order.IsRound,
-			&order.Priority, &order.OrderStatus, &order.OrderStatusUpdatedAt, &order.InternalNotes, &order.UpdatedBy,
+			&order.Priority, &order.OrderStatus, &order.OrderStatusUpdatedAt, &order.InternalNotes,
+			&order.IsFreshRoll, &order.IsFreshRollAddressed, &order.FreshRollAddressedAction,
+			&order.UpdatedBy,
 			&order.ReviewConfidence, &order.ReviewConfidenceUpdatedAt,
 			&productsJSON,
 		)
@@ -3739,6 +3755,7 @@ func (r *OrderRepository) GetOrderByID(ctx context.Context, amazonOrderID string
 			customer_width_in_mm, customer_length_in_mm,
 			corner_radius_and_notes,
 			internal_notes, priority, order_status, order_status_updated_at, is_round,
+			is_fresh_roll, is_fresh_roll_addressed, fresh_roll_addressed_action,
 			COALESCE(ri.review_confidence, 0) AS review_confidence, ri.review_updated_at AS review_confidence_updated_at,
 			updated_by, created_at, updated_at
 		FROM amazon_orders o
@@ -3775,6 +3792,7 @@ func (r *OrderRepository) GetOrderByID(ctx context.Context, amazonOrderID string
 		&order.CustomerWidthInMM, &order.CustomerLengthInMM,
 		&order.CornerRadiusAndNotes,
 		&order.InternalNotes, &order.Priority, &order.OrderStatus, &order.OrderStatusUpdatedAt, &order.IsRound,
+		&order.IsFreshRoll, &order.IsFreshRollAddressed, &order.FreshRollAddressedAction,
 		&order.ReviewConfidence, &order.ReviewConfidenceUpdatedAt,
 		&order.UpdatedBy, &order.CreatedAt, &order.UpdatedAt,
 	)
@@ -4064,6 +4082,24 @@ func (r *OrderRepository) UpdateManualFields(ctx context.Context, amazonOrderID 
 	if req.IsRound != nil {
 		updates = append(updates, fmt.Sprintf("is_round = $%d", argPos))
 		args = append(args, req.IsRound)
+		argPos++
+	}
+
+	if req.IsFreshRoll != nil {
+		updates = append(updates, fmt.Sprintf("is_fresh_roll = $%d", argPos))
+		args = append(args, req.IsFreshRoll)
+		argPos++
+	}
+
+	if req.IsFreshRollAddressed != nil {
+		updates = append(updates, fmt.Sprintf("is_fresh_roll_addressed = $%d", argPos))
+		args = append(args, req.IsFreshRollAddressed)
+		argPos++
+	}
+
+	if req.FreshRollAddressedAction != nil {
+		updates = append(updates, fmt.Sprintf("fresh_roll_addressed_action = $%d", argPos))
+		args = append(args, req.FreshRollAddressedAction)
 		argPos++
 	}
 

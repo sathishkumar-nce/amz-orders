@@ -83,6 +83,9 @@ type AmazonOrder struct {
 	OrderStatus               string          `json:"order_status"`
 	OrderStatusUpdatedAt      sql.NullTime    `json:"order_status_updated_at,omitempty"`
 	IsRound                   bool            `json:"is_round"`
+	IsFreshRoll               bool            `json:"is_fresh_roll"`
+	IsFreshRollAddressed      bool            `json:"is_fresh_roll_addressed"`
+	FreshRollAddressedAction  sql.NullString  `json:"fresh_roll_addressed_action,omitempty"`
 	ReviewConfidence          int             `json:"review_confidence"`
 	ReviewConfidenceUpdatedAt sql.NullTime    `json:"review_confidence_updated_at,omitempty"`
 	UpdatedBy                 sql.NullString  `json:"updated_by,omitempty"`
@@ -143,20 +146,23 @@ type OrderProduct struct {
 
 // UpdateManualFieldsRequest represents manual field updates
 type UpdateManualFieldsRequest struct {
-	DefaultWidthInInches   *float64 `json:"default_width_in_inches,omitempty"`
-	DefaultLengthInInches  *float64 `json:"default_length_in_inches,omitempty"`
-	CustomerWidthInInches  *float64 `json:"customer_width_in_inches,omitempty"`
-	CustomerLengthInInches *float64 `json:"customer_length_in_inches,omitempty"`
-	DefaultWidthInMM       *float64 `json:"default_width_in_mm,omitempty"`
-	DefaultLengthInMM      *float64 `json:"default_length_in_mm,omitempty"`
-	CustomerWidthInMM      *float64 `json:"customer_width_in_mm,omitempty"`
-	CustomerLengthInMM     *float64 `json:"customer_length_in_mm,omitempty"`
-	CornerRadiusAndNotes   *string  `json:"corner_radius_and_notes,omitempty"`
-	InternalNotes          *string  `json:"internal_notes,omitempty"`
-	Priority               *string  `json:"priority,omitempty"`
-	OrderStatus            *string  `json:"order_status,omitempty"`
-	IsRound                *bool    `json:"is_round,omitempty"`
-	ReviewConfidence       *int     `json:"review_confidence,omitempty"`
+	DefaultWidthInInches     *float64 `json:"default_width_in_inches,omitempty"`
+	DefaultLengthInInches    *float64 `json:"default_length_in_inches,omitempty"`
+	CustomerWidthInInches    *float64 `json:"customer_width_in_inches,omitempty"`
+	CustomerLengthInInches   *float64 `json:"customer_length_in_inches,omitempty"`
+	DefaultWidthInMM         *float64 `json:"default_width_in_mm,omitempty"`
+	DefaultLengthInMM        *float64 `json:"default_length_in_mm,omitempty"`
+	CustomerWidthInMM        *float64 `json:"customer_width_in_mm,omitempty"`
+	CustomerLengthInMM       *float64 `json:"customer_length_in_mm,omitempty"`
+	CornerRadiusAndNotes     *string  `json:"corner_radius_and_notes,omitempty"`
+	InternalNotes            *string  `json:"internal_notes,omitempty"`
+	Priority                 *string  `json:"priority,omitempty"`
+	OrderStatus              *string  `json:"order_status,omitempty"`
+	IsRound                  *bool    `json:"is_round,omitempty"`
+	IsFreshRoll              *bool    `json:"is_fresh_roll,omitempty"`
+	IsFreshRollAddressed     *bool    `json:"is_fresh_roll_addressed,omitempty"`
+	FreshRollAddressedAction *string  `json:"fresh_roll_addressed_action,omitempty"`
+	ReviewConfidence         *int     `json:"review_confidence,omitempty"`
 }
 
 type ReviewFollowupStateSetting struct {

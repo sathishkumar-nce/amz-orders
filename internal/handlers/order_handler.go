@@ -266,6 +266,16 @@ func applySharedListFilters(c *gin.Context, filters map[string]interface{}) {
 			filters["round_product"] = parsed
 		}
 	}
+	if val := c.Query("is_fresh_roll"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			filters["is_fresh_roll"] = parsed
+		}
+	}
+	if val := c.Query("is_fresh_roll_addressed"); val != "" {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			filters["is_fresh_roll_addressed"] = parsed
+		}
+	}
 	if val := c.Query("missing_customer_inputs"); val != "" {
 		if parsed, err := strconv.ParseBool(val); err == nil {
 			filters["missing_customer_inputs"] = parsed
@@ -296,6 +306,29 @@ func applySharedListFilters(c *gin.Context, filters map[string]interface{}) {
 			filters["safety_claimed"] = parsed
 		}
 	}
+}
+
+func applyReturnsDefaultFilters(filters map[string]interface{}, hasSearchValue bool) {
+	if _, hasExplicitReturnInitiated := filters["return_initiated"]; hasExplicitReturnInitiated {
+		return
+	}
+	if hasSearchValue {
+		return
+	}
+	if _, hasOrderIDSearch := filters["amazon_order_id"]; hasOrderIDSearch {
+		return
+	}
+	filters["return_initiated"] = true
+}
+
+func applySafetyClaimsDefaultFilters(filters map[string]interface{}) {
+	if _, hasOrderIDSearch := filters["amazon_order_id"]; hasOrderIDSearch {
+		return
+	}
+	if _, hasExplicitOrderStatus := filters["order_status"]; hasExplicitOrderStatus {
+		return
+	}
+	filters["order_status"] = "returned"
 }
 
 // Health returns service health status
@@ -1023,9 +1056,7 @@ func (h *OrderHandler) ListReturns(c *gin.Context) {
 
 	filters := map[string]interface{}{}
 	applySharedListFilters(c, filters)
-	if _, hasExplicitReturnInitiated := filters["return_initiated"]; !hasExplicitReturnInitiated {
-		filters["return_initiated_exclude"] = false
-	}
+	applyReturnsDefaultFilters(filters, strings.TrimSpace(c.Query("search_value")) != "" || strings.TrimSpace(c.Query("search")) != "")
 	log.Printf("📋 List returns requested (page=%d limit=%d filters=%d)", page, limit, len(filters))
 
 	orders, total, err := h.service.ListOrders(c.Request.Context(), filters, page, limit)
@@ -1061,9 +1092,7 @@ func (h *OrderHandler) ListSafetyClaims(c *gin.Context) {
 
 	filters := map[string]interface{}{}
 	applySharedListFilters(c, filters)
-	if _, hasExplicitSafetyClaimed := filters["safety_claimed"]; !hasExplicitSafetyClaimed {
-		filters["safety_claimed_exclude"] = false
-	}
+	applySafetyClaimsDefaultFilters(filters)
 	log.Printf("📋 List safety claims requested (page=%d limit=%d filters=%d)", page, limit, len(filters))
 
 	orders, total, err := h.service.ListOrders(c.Request.Context(), filters, page, limit)
