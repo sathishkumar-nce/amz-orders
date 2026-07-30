@@ -19,8 +19,9 @@ import (
 )
 
 type OrderRepository struct {
-	pool           *pgxpool.Pool
-	interaktClient *interakt.Client
+	pool                 *pgxpool.Pool
+	interaktClient       *interakt.Client
+	interaktExcludedSKUs []string
 }
 
 const analyticsISTOffsetSeconds = 5*60*60 + 30*60
@@ -102,8 +103,9 @@ type executiveRecentActivityRow struct {
 
 func NewOrderRepository(pool *pgxpool.Pool) *OrderRepository {
 	return &OrderRepository{
-		pool:           pool,
-		interaktClient: nil,
+		pool:                 pool,
+		interaktClient:       nil,
+		interaktExcludedSKUs: nil,
 	}
 }
 
@@ -2865,6 +2867,10 @@ func (r *OrderRepository) SetInteraktClient(client *interakt.Client) {
 	r.interaktClient = client
 }
 
+func (r *OrderRepository) SetDefaultInteraktExcludedSKUs(skus []string) {
+	r.interaktExcludedSKUs = append([]string(nil), skus...)
+}
+
 // UpsertOrder inserts or updates an order with its products in a transaction
 func (r *OrderRepository) UpsertOrder(ctx context.Context, order *models.AmazonOrder, products []models.OrderProduct) error {
 	tx, err := r.pool.Begin(ctx)
@@ -2924,6 +2930,10 @@ func (r *OrderRepository) UpsertOrder(ctx context.Context, order *models.AmazonO
 	case !r.interaktClient.Enabled():
 		log.Printf("ℹ️  Interakt send skipped for Amazon order %s because Interakt is disabled", order.AmazonOrderID)
 	default:
+		if sku, excluded := hasExcludedInteraktSKU(products, r.interaktExcludedSKUs); excluded {
+			log.Printf("ℹ️  Interakt send skipped for Amazon order %s because SKU %s is excluded", order.AmazonOrderID, sku)
+			return nil
+		}
 		if err := r.sendOrderConfirmationWhatsApp(ctx, order, products); err != nil {
 			// Log error but don't fail the transaction
 			log.Printf("⚠️  Failed to send WhatsApp message for order %s: %v", order.AmazonOrderID, err)
@@ -2931,6 +2941,30 @@ func (r *OrderRepository) UpsertOrder(ctx context.Context, order *models.AmazonO
 	}
 
 	return nil
+}
+
+func hasExcludedInteraktSKU(products []models.OrderProduct, excludedSKUGroups ...[]string) (string, bool) {
+	excluded := make(map[string]struct{})
+	for _, skus := range excludedSKUGroups {
+		for _, sku := range skus {
+			normalized := strings.ToUpper(strings.TrimSpace(sku))
+			if normalized != "" {
+				excluded[normalized] = struct{}{}
+			}
+		}
+	}
+
+	for _, product := range products {
+		if !product.SKU.Valid {
+			continue
+		}
+		sku := strings.ToUpper(strings.TrimSpace(product.SKU.String))
+		if _, ok := excluded[sku]; ok {
+			return sku, true
+		}
+	}
+
+	return "", false
 }
 
 // sendOrderConfirmationWhatsApp sends the new-order WhatsApp message via Interakt.

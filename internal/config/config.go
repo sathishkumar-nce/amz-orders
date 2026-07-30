@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -36,6 +37,7 @@ type Config struct {
 	InteraktMode                   string
 	InteraktTestNumber             string
 	InteraktTemplateName           string
+	InteraktExcludedSKUs           []string
 }
 
 func Load() *Config {
@@ -92,6 +94,7 @@ func Load() *Config {
 		InteraktMode:                   getEnv("INTERAKT_MODE", "prod"), // test or prod
 		InteraktTestNumber:             getEnv("INTERAKT_TEST_NUMBER", ""),
 		InteraktTemplateName:           getEnv("INTERAKT_TEMPLATE_NAME", "amzmrclearorderconfirmation_v2"),
+		InteraktExcludedSKUs:           resolveInteraktExcludedSKUs(),
 	}
 }
 
@@ -109,4 +112,23 @@ func loadOptionalEnv(path string) {
 		}
 		log.Printf("Warning: failed to load %s: %v", path, err)
 	}
+}
+
+func splitEnvList(value string) []string {
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func resolveInteraktExcludedSKUs() []string {
+	if value := os.Getenv("INTERAKT_EXCLUDED_SKUS"); value != "" {
+		return splitEnvList(value)
+	}
+	return append([]string(nil), DefaultInteraktExcludedSKUs...)
 }

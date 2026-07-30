@@ -53,6 +53,7 @@ func main() {
 
 	// Initialize repositories
 	orderRepo := repository.NewOrderRepository(pool)
+	orderRepo.SetDefaultInteraktExcludedSKUs(cfg.InteraktExcludedSKUs)
 	directOrderRepo := repository.NewDirectOrderRepository(pool)
 	priorityRuleRepo := repository.NewPriorityRuleRepository(pool)
 	userRepo := repository.NewUserRepository(pool)
