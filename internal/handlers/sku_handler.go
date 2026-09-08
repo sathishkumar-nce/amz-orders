@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,8 @@ import (
 type SKUHandler struct {
 	skuCSVPath string
 }
+
+const maxSKUCSVSize int64 = 10 << 20
 
 type skuFileMetadata struct {
 	UploadedFileName string `json:"uploaded_file_name"`
@@ -96,6 +99,48 @@ func copyFileContents(srcPath, dstPath string) error {
 	}
 
 	return nil
+}
+
+// saveUploadedCSV streams an upload into a staging file without changing the
+// destination directory's permissions. Gin's SaveUploadedFile calls chmod on
+// that directory, which fails on read-only container roots such as /app.
+func saveUploadedCSV(file *multipart.FileHeader, destinationDir string) (string, error) {
+	if err := os.MkdirAll(destinationDir, 0o750); err != nil {
+		return "", err
+	}
+
+	src, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	tempFile, err := os.CreateTemp(destinationDir, ".sku-upload-*.csv")
+	if err != nil {
+		return "", err
+	}
+	tempPath := tempFile.Name()
+	completed := false
+	defer func() {
+		if !completed {
+			_ = tempFile.Close()
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	written, err := io.Copy(tempFile, io.LimitReader(src, maxSKUCSVSize+1))
+	if err != nil {
+		return "", err
+	}
+	if written > maxSKUCSVSize {
+		return "", fmt.Errorf("file size exceeds maximum limit of 10MB")
+	}
+	if err := tempFile.Close(); err != nil {
+		return "", err
+	}
+
+	completed = true
+	return tempPath, nil
 }
 
 // GetSKUFileInfo returns information about the current SKU CSV file
@@ -205,15 +250,15 @@ func (h *SKUHandler) UpdateSKUFile(c *gin.Context) {
 	}
 
 	// Validate file size (max 10MB)
-	if file.Size > 10<<20 {
+	if file.Size > maxSKUCSVSize {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "File size exceeds maximum limit of 10MB.",
 		})
 		return
 	}
 
-	tempPath := h.skuCSVPath + ".uploading"
-	if err := c.SaveUploadedFile(file, tempPath); err != nil {
+	tempPath, err := saveUploadedCSV(file, filepath.Dir(h.skuCSVPath))
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("Failed to save file: %v", err),
 		})
