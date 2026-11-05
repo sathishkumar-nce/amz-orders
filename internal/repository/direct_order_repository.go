@@ -207,6 +207,14 @@ func (r *DirectOrderRepository) Update(ctx context.Context, orderID string, req 
 	}
 	defer tx.Rollback(ctx)
 
+	var courier, awb, status string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(courier_type,''),COALESCE(awb,''),COALESCE(courier_status,'') FROM direct_orders WHERE order_id=$1 AND deleted_at IS NULL FOR UPDATE`, orderID).Scan(&courier, &awb, &status); err != nil {
+		return nil, err
+	}
+	if err := validateShipmentEdit(courier, awb, status, req); err != nil {
+		return nil, err
+	}
+
 	var setParts []string
 	var args []interface{}
 	argIndex := 1
@@ -348,7 +356,19 @@ func (r *DirectOrderRepository) Update(ctx context.Context, orderID string, req 
 
 func (r *DirectOrderRepository) SoftDelete(ctx context.Context, orderID string) error {
 	log.Printf("🗑️  Repository soft delete started (order_id=%s)", orderID)
-	result, err := r.db.Exec(ctx, `UPDATE direct_orders SET deleted_at = $1 WHERE order_id = $2 AND deleted_at IS NULL`, time.Now(), orderID)
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var courier, awb, status string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(courier_type,''),COALESCE(awb,''),COALESCE(courier_status,'') FROM direct_orders WHERE order_id=$1 AND deleted_at IS NULL FOR UPDATE`, orderID).Scan(&courier, &awb, &status); err != nil {
+		return err
+	}
+	if status == "booking_pending" || status == "booking_review" || (courier == "dtdc" && awb != "") {
+		return ErrShipmentLocked
+	}
+	result, err := tx.Exec(ctx, `UPDATE direct_orders SET deleted_at = $1 WHERE order_id = $2 AND deleted_at IS NULL`, time.Now(), orderID)
 	if err != nil {
 		return err
 	}
@@ -356,7 +376,7 @@ func (r *DirectOrderRepository) SoftDelete(ctx context.Context, orderID string) 
 		return sql.ErrNoRows
 	}
 	log.Printf("✅ Repository soft delete completed (order_id=%s)", orderID)
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *DirectOrderRepository) List(ctx context.Context, filters models.DirectOrderFilters) ([]models.DirectOrder, int, error) {
@@ -457,7 +477,7 @@ func (r *DirectOrderRepository) SaveDelhiveryForwardOrder(ctx context.Context, o
 			pickup_requested_at = $7,
 			courier_payload = $8,
 			updated_by = $9
-		WHERE order_id = $10 AND deleted_at IS NULL
+		WHERE order_id = $10 AND courier_type='delhivery' AND courier_status='booking_pending' AND deleted_at IS NULL
 	`
 
 	res, err := r.db.Exec(ctx, query,
@@ -582,6 +602,22 @@ func buildDirectOrderWhere(filters models.DirectOrderFilters) (string, []interfa
 	argIndex := 1
 
 	whereClauses = append(whereClauses, "deleted_at IS NULL")
+	if filters.BookedOnly {
+		whereClauses = append(whereClauses, "courier_type IN ('dtdc','delhivery') AND (COALESCE(awb,'')<>'' OR courier_status IN ('booking_pending','booking_review'))")
+	}
+	if filters.CourierType != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("courier_type=$%d", argIndex))
+		args = append(args, filters.CourierType)
+		argIndex++
+	}
+	if filters.DTDCBookedOnly {
+		whereClauses = append(whereClauses, "courier_type = 'dtdc' AND (COALESCE(awb, '') <> '' OR courier_status IN ('booking_pending', 'booking_review'))")
+	}
+	if filters.CourierStatus != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("courier_status ILIKE $%d", argIndex))
+		args = append(args, filters.CourierStatus)
+		argIndex++
+	}
 
 	if filters.OrderID != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("order_id ILIKE $%d", argIndex))
@@ -596,8 +632,19 @@ func buildDirectOrderWhere(filters models.DirectOrderFilters) (string, []interfa
 			COALESCE(mobile, '') ILIKE $%d OR
 			COALESCE(pincode, '') ILIKE $%d
 		)`, argIndex, argIndex, argIndex, argIndex, argIndex))
-		args = append(args, "%"+filters.Search+"%")
-		argIndex++
+		search := strings.TrimSpace(filters.Search)
+		digits := regexp.MustCompile(`[^0-9]`).ReplaceAllString(search, "")
+		if digits != "" && regexp.MustCompile(`^[0-9+().\s-]+$`).MatchString(search) {
+			if len(digits) == 12 && strings.HasPrefix(digits, "91") {
+				digits = digits[2:]
+			}
+			whereClauses[len(whereClauses)-1] = "(" + whereClauses[len(whereClauses)-1] + fmt.Sprintf(" OR regexp_replace(COALESCE(mobile,''),'[^0-9]','','g') LIKE $%d OR regexp_replace(COALESCE(alternate_mobile,''),'[^0-9]','','g') LIKE $%d)", argIndex+1, argIndex+1)
+			args = append(args, "%"+search+"%", "%"+digits+"%")
+			argIndex += 2
+		} else {
+			args = append(args, "%"+search+"%")
+			argIndex++
+		}
 	}
 	if filters.AWB != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("awb ILIKE $%d", argIndex))

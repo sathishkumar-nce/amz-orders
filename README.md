@@ -453,3 +453,190 @@ curl "http://localhost:8080/api/v1/returns?return_status=returned" \
 Current quick verification on this checkout:
 
 - `go test ./...` passes
+
+## DTDC and Delhivery direct-order scheduling
+
+Create and save a direct order, then choose **Schedule Order** (or select orders and
+choose **Schedule Selected Orders**). The booking dialog offers **Delhivery** and
+**DTDC**. It defaults to the order's selected courier when DTDC is selected;
+other orders default to Delhivery. Each bulk booking reports its own success or
+failure, and successful bookings are not retried.
+
+Configure the seller's DTDC account and pickup location using the variables in
+[.env.dtdc.example](.env.dtdc.example). Add these to the backend `.env` for local
+runs or the deployment environment used by Docker Compose, then restart/recreate
+the backend. The API key and tracking token stay on the backend. Customer names,
+addresses, pincodes, and phones are read from each direct order, so no environment
+configuration is required per customer. `DTDC_SERVICE_TYPE` is the account's
+approved service; it may be overridden in the DTDC booking dialog.
+
+DTDC booking requires a full destination address, positive package dimensions in
+cm, total weight in **grams**, and declared amount. The backend converts total
+weight to kg. For multiple parcels the dialog collects each parcel's weight in
+**kg**, dimensions, description, and declared value. COD uses `cod_amount`; zero
+means prepaid. An optional 12-digit e-way bill and risk surcharge flag can be sent.
+This creates the forward consignment and saves its AWB; a separate pickup-request
+API is not part of the supplied DTDC integration.
+
+Open **Courier Shipments** (`/courier-shipments`) from the Direct navigation or
+Direct Orders. This paginated screen lists both DTDC and Delhivery shipments,
+including cancelled shipments and bookings awaiting reconciliation. Search by
+order, customer, mobile or AWB and filter by courier, saved courier status, or
+created-date range. Click an AWB to fetch official tracking into the details panel.
+Tracking scans and the last refresh time are saved. The existing DTDC-only screen
+at `/dtdc-shipments` remains available, including page-wide tracking refresh.
+Labels are available in 4x6, A4 and A6 PDF sizes. A successful DTDC booking downloads
+its label automatically by default, with a manual download/retry button in the
+results. Label failures do not retry booking. Browsers may require permission for
+multiple downloads during bulk booking. Cancellation is only recorded
+when DTDC confirms the matching AWB. Tracking refresh is on demand, not a
+background polling job. `DTDC_TRACKING_TOKEN` is required only for live tracking.
+
+An atomic database claim prevents duplicate bookings across both couriers,
+including simultaneous clicks from different browsers. A timeout or ambiguous
+carrier response sets `booking_review` (or leaves `booking_pending` after a crash)
+and blocks retries. Verify the shipment with DTDC/Delhivery using the direct order
+ID as the customer reference before reconciling the local record. Do not simply
+clear this status and rebook. DTDC AWBs and carrier identity cannot be overwritten
+with manual edits; DTDC shipments remain in the list when cancelled.
+
+Authenticated DTDC APIs:
+
+- `GET /api/v1/direct-orders/dtdc/settings` — configuration readiness, no secrets
+- `GET /api/v1/direct-orders/dtdc/shipments` — filters and pagination
+- `POST /api/v1/direct-orders/:order_id/dtdc/book` — JSON booking options (`{}` for defaults)
+- `POST /api/v1/direct-orders/:order_id/dtdc/track` — refresh and persist tracking
+- `POST /api/v1/direct-orders/:order_id/dtdc/reconcile` — recover a confirmed AWB by exact order reference
+- `POST /api/v1/direct-orders/:order_id/dtdc/cancel` — cancel and persist confirmation
+- `GET /api/v1/direct-orders/:order_id/dtdc/label?label_code=SHIP_LABEL_4X6` — PDF label
+- `GET /api/v1/direct-orders/courier-settings` — saved runtime service modes and label preferences
+- `PUT /api/v1/direct-orders/courier-settings` — update runtime preferences
+- `GET /api/v1/direct-orders/shipments?courier=all` — DTDC and Delhivery shipments
+- `POST /api/v1/direct-orders/:order_id/tracking` — official tracking and shared saved summary
+
+Apply all current migrations before deploying the courier flows, including
+`db-migrations/00020_courier_settings.sql` for persistent runtime preferences.
+Booking and tracking continue to use the existing direct-order shipment fields.
+
+### Runtime settings and customer tracking
+
+Open **Tools → Courier Settings** (`/courier-settings`) to add, rename, disable or
+remove DTDC service modes and choose the default service, commodity, label format,
+and automatic label-download preference. Codes are normalized to uppercase and
+must be unique; the default must be enabled. Changes are stored in PostgreSQL and
+used by new bookings immediately, across backend instances. An already-open booking
+dialog has a **Refresh service list** button. Adding a mode does not provision it
+with DTDC: the account must be approved for the exact code. API credentials and
+pickup configuration remain backend environment variables.
+
+Open **Direct → Tracking & WhatsApp** (`/order-tracking`) to search **direct orders
+only** by customer mobile, name, tracking ID or order ID. Formatted Indian phone
+queries are supported and all matching orders are paginated, including unshipped
+orders. Select an order or click its AWB to fetch the official DTDC or Delhivery
+tracking API. The nearby panel shows status, location, scan history, available ETA,
+and the last check time. Failed refreshes retain saved data and show an error.
+
+Review the recipient and editable status message, then click **Open WhatsApp Web**.
+The message includes the order, available tracking details, last check time and an
+official courier tracking URL. The app opens WhatsApp Web's compose screen; the
+staff member clicks Send there. No WhatsApp API or automatic message send is used.
+Orders without AWBs can share their saved order status without inventing a tracking
+link. These screens do not search or modify Amazon-imported orders.
+
+### Run a DTDC staging lifecycle test
+
+The DTDC pickup configuration is set to **Tekgien Softwares, 34-h, fourth lane,
+swami nagar, salem road, Namakkal, Tamil Nadu, 637001**. The pickup phone is configured as **9345266494**. DTDC
+account-specific values still need to be supplied. These DTDC values do not replace
+Delhivery's configured pickup location or seller address.
+
+Copy `.env.dtdc.staging.example` to `.env.dtdc.staging.local` and fill the
+**staging-enabled** API key/token, customer code, service type, commodity and
+pickup phone. From the backend directory run:
+
+```bash
+DTDC_RUN_STAGING_TESTS=1 go test ./internal/integrations/dtdc -run '^TestStagingLifecycle$' -count=1 -v
+```
+
+This opt-in test uses the real DTDC client. It creates a uniquely named staging
+consignment with the seller as its test recipient, checks its PDF label, queries
+tracking, and cancels the staging AWB in cleanup even if a later check fails.
+A newly booked staging AWB may have no scans; use `DTDC_STAGE_TRACKING_AWB` for a
+DTDC-provided staging AWB with tracking history. Missing scans are reported, not
+claimed as a successful history check.
+
+The test refuses production or unrecognized endpoints and redirects. It reads
+only the dedicated staging file / supplied process environment, does not load the
+application's production environment files, and does not touch the application
+database. Normal `go test ./...` skips the external lifecycle test.
+
+On 2026-11-03, non-booking requests to the two documented staging endpoints
+rejected the credentials available in the workspace: booking returned HTTP 401
+(`WRONG_API_KEY`), and tracking returned HTTP 401 (invalid authentication token).
+The documented staging token-authentication endpoint also returned HTTP 403
+(`Not Authorized`) for the supplied tracking credential pair.
+Consequently no staging shipment was created and the live staging lifecycle has
+not been verified. Valid staging credentials and the remaining seller account
+fields are required to finish that check.
+
+### DTDC booking dropdowns
+
+The DTDC booking dialog uses the enabled modes saved in Courier Settings. Initial
+modes include the environment's configured service, `B2C SMART EXPRESS`,
+`B2C EXPRESS`, `B2B PREMIUM`, and the guide's `B2C PREMIUM` / `B2C PRIORITY` examples.
+These examples do not prove that a service is enabled on the seller account.
+
+The commodity dropdown uses the 87 IDs/names from DTDC's linked commodity
+catalogue, retrieved on 2026-11-03. Examples include `84` (PLASTIC ITEMS), `43`
+(HOUSEHOLD GOODS), and `7` (OTHERS). Source:
+https://docs.google.com/spreadsheets/d/158LuKmF8mHXSQfXcSE-U_NVeUpz-O1LuNlc1ualKEeI/edit
+
+`DTDC_SERVICE_TYPE` and `DTDC_COMMODITY` seed the seller defaults on first use;
+saved runtime settings then take precedence. Selecting a service or commodity in
+the booking dialog overrides the default for that booking. Account credentials,
+customer code, and pickup details are still required. Customer codes and API
+credentials are account-specific and have no generic dropdown values. Delhivery
+does not use these DTDC selections.
+
+### Verified production service for EO2440
+
+On 2026-11-05, `B2C SMART EXPRESS` successfully created production AWB
+`7D128718632`. DTDC then confirmed cancellation for that exact AWB. The backend
+environment now defaults to `DTDC_SERVICE_TYPE=B2C SMART EXPRESS` and
+`DTDC_COMMODITY=84` (PLASTIC ITEMS). Restart the backend to load these defaults.
+The booking dialog includes the configured service in its service dropdown.
+
+`B2C EXPRESS` was not attempted because the first requested service worked.
+See [the production test record](docs/dtdc-production-check-2026-11-05.md) for
+confirmation details and the limits of this test.
+
+### Recover an uncertain DTDC booking
+
+On DTDC Shipments, an order with an uncertain booking offers **Check booking with
+DTDC**. This queries tracking by the saved order reference and attaches an AWB only
+when DTDC returns that exact reference and a matching customer account (when the
+account is present in the tracking response). It does not create another shipment.
+A currently pending booking must be at least two minutes old before recovery.
+Missing scans, mismatched references, and unavailable tracking leave it locked.
+
+The original booking payload, selected service, carrier response, and failure reason
+are retained for review. Confirmed cancellation remains authoritative while tracking
+scans can still be refreshed: DTDC's tracking header may temporarily show an earlier
+status after its cancellation API has confirmed success.
+
+### Database integration tests
+
+Set `DTDC_TEST_DATABASE_URL` to a separate local PostgreSQL database named
+`codex_dtdc_test`, then run `go test ./...`. The tests create and remove their own
+schema, apply the real migrations, and use local mocked carrier endpoints. They
+verify booking persistence, tracking, labels, cancellation, recovery, duplicate
+protection across both couriers, and existing Delhivery payload mappings. They
+refuse any other database name or a non-local database host. Without this variable,
+these database tests are skipped.
+
+The Makefile uses `ENV_FILE=.env.docker` by default. Supply DTDC credentials in the
+selected deployment environment before recreating the app container. The local
+production credentials are stored in the Git-ignored `.env`; a deployment may use
+that file explicitly with `ENV_FILE=.env`, provided its database/port values match
+the deployment. Service restarts and remote deployment are separate from these
+source changes.

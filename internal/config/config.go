@@ -11,6 +11,20 @@ import (
 )
 
 type Config struct {
+	DTDCBaseURL       string
+	DTDCTrackingURL   string
+	DTDCAPIKey        string
+	DTDCTrackingToken string
+	DTDCCustomerCode  string
+	DTDCServiceType   string
+	DTDCCommodity     string
+	DTDCOriginName    string
+	DTDCOriginPhone   string
+	DTDCOriginAddress string
+	DTDCOriginPincode string
+	DTDCOriginCity    string
+	DTDCOriginState   string
+
 	AppPort                        string
 	DatabaseURL                    string
 	BaseLinkerAPIURL               string
@@ -68,6 +82,20 @@ func Load() *Config {
 	}
 
 	return &Config{
+		DTDCBaseURL:       getEnv("DTDC_BASE_URL", ""),
+		DTDCTrackingURL:   getEnv("DTDC_TRACKING_URL", ""),
+		DTDCAPIKey:        getEnv("DTDC_API_KEY", ""),
+		DTDCTrackingToken: getEnv("DTDC_TRACKING_TOKEN", ""),
+		DTDCCustomerCode:  getEnv("DTDC_CUSTOMER_CODE", ""),
+		DTDCServiceType:   getEnv("DTDC_SERVICE_TYPE", ""),
+		DTDCCommodity:     getEnv("DTDC_COMMODITY", ""),
+		DTDCOriginName:    getEnv("DTDC_ORIGIN_NAME", ""),
+		DTDCOriginPhone:   getEnv("DTDC_ORIGIN_PHONE", ""),
+		DTDCOriginAddress: getEnv("DTDC_ORIGIN_ADDRESS", ""),
+		DTDCOriginPincode: getEnv("DTDC_ORIGIN_PINCODE", ""),
+		DTDCOriginCity:    getEnv("DTDC_ORIGIN_CITY", ""),
+		DTDCOriginState:   getEnv("DTDC_ORIGIN_STATE", ""),
+
 		AppPort:                        getEnv("APP_PORT", "8080"),
 		DatabaseURL:                    getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/amz_orders?sslmode=disable"),
 		BaseLinkerAPIURL:               getEnv("BASELINKER_API_URL", "https://api.baselinker.com/connector.php"),

@@ -174,23 +174,27 @@ type UpdateDirectOrderRequest struct {
 }
 
 type DirectOrderFilters struct {
-	OrderID       string
-	Search        string
-	AWB           string
-	OrderStatus   string
-	PaymentStatus string
-	Priority      string
-	Source        string
-	Mobile        string
-	CustomerName  string
-	Item          string
-	Quantity      int
-	Pincode       string
-	DateExact     string
-	DateFrom      string
-	DateTo        string
-	Page          int
-	Limit         int
+	DTDCBookedOnly bool
+	BookedOnly     bool
+	CourierType    string
+	CourierStatus  string
+	OrderID        string
+	Search         string
+	AWB            string
+	OrderStatus    string
+	PaymentStatus  string
+	Priority       string
+	Source         string
+	Mobile         string
+	CustomerName   string
+	Item           string
+	Quantity       int
+	Pincode        string
+	DateExact      string
+	DateFrom       string
+	DateTo         string
+	Page           int
+	Limit          int
 }
 
 type DirectOrderBulkForwardRequest struct {

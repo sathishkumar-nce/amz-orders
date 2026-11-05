@@ -14,6 +14,7 @@ import (
 	"github.com/sathishkumar-nce/amz-orders/internal/handlers"
 	"github.com/sathishkumar-nce/amz-orders/internal/integrations/baselinker"
 	"github.com/sathishkumar-nce/amz-orders/internal/integrations/delhivery"
+	"github.com/sathishkumar-nce/amz-orders/internal/integrations/dtdc"
 	"github.com/sathishkumar-nce/amz-orders/internal/integrations/interakt"
 	"github.com/sathishkumar-nce/amz-orders/internal/models"
 	"github.com/sathishkumar-nce/amz-orders/internal/repository"
@@ -130,6 +131,12 @@ func main() {
 		ClientGSTIN:           cfg.DelhiveryClientGSTIN,
 	})
 	directOrderHandler := handlers.NewDirectOrderHandler(directOrderRepo, delhiveryClient)
+	directOrderHandler.SetDTDCClient(dtdc.NewClient(dtdc.Config{
+		BaseURL: cfg.DTDCBaseURL, TrackingURL: cfg.DTDCTrackingURL,
+		APIKey: cfg.DTDCAPIKey, TrackingToken: cfg.DTDCTrackingToken, CustomerCode: cfg.DTDCCustomerCode,
+		ServiceType: cfg.DTDCServiceType, Commodity: cfg.DTDCCommodity,
+		Origin: dtdc.Address{Name: cfg.DTDCOriginName, Phone: cfg.DTDCOriginPhone, Address: cfg.DTDCOriginAddress, Pincode: cfg.DTDCOriginPincode, City: cfg.DTDCOriginCity, State: cfg.DTDCOriginState},
+	}))
 
 	// Setup router
 	r := router.SetupRouter(orderHandler, authHandler, skuHandler, priorityRuleHandler, dbBackupHandler, directOrderHandler, shippingDateFilterHandler, rowHighlightRuleHandler, interaktSettingsHandler, cfg)

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"errors"
@@ -14,11 +15,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/sathishkumar-nce/amz-orders/internal/integrations/delhivery"
+	"github.com/sathishkumar-nce/amz-orders/internal/integrations/dtdc"
 	"github.com/sathishkumar-nce/amz-orders/internal/models"
 	"github.com/sathishkumar-nce/amz-orders/internal/repository"
 )
 
 type DirectOrderHandler struct {
+	dtdcClient      *dtdc.Client
 	repo            *repository.DirectOrderRepository
 	delhiveryClient *delhivery.Client
 }
@@ -168,6 +171,10 @@ func (h *DirectOrderHandler) UpdateDirectOrder(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
 			return
 		}
+		if errors.Is(err, repository.ErrShipmentLocked) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -178,6 +185,10 @@ func (h *DirectOrderHandler) UpdateDirectOrder(c *gin.Context) {
 func (h *DirectOrderHandler) DeleteDirectOrder(c *gin.Context) {
 	orderID := c.Param("order_id")
 	if err := h.repo.SoftDelete(c.Request.Context(), orderID); err != nil {
+		if errors.Is(err, repository.ErrShipmentLocked) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
 			return
@@ -364,20 +375,13 @@ func (h *DirectOrderHandler) CreateDelhiveryForwardOrder(c *gin.Context) {
 		return
 	}
 
-	result, err := h.delhiveryClient.CreateForwardOrder(c.Request.Context(), order)
+	updatedOrder, err := h.scheduleDelhivery(c.Request.Context(), order, currentActorName(c))
 	if err != nil {
-		log.Printf("❌ Delhivery forward order creation failed (order_id=%s): %v", orderID, err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	updatedOrder, err := h.repo.SaveDelhiveryForwardOrder(c.Request.Context(), orderID, *result, currentActorName(c))
-	if err != nil {
-		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
-			return
+		status := http.StatusBadGateway
+		if errors.Is(err, repository.ErrShipmentLocked) {
+			status = http.StatusConflict
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -429,21 +433,9 @@ func (h *DirectOrderHandler) CreateDelhiveryForwardOrdersBulk(c *gin.Context) {
 			continue
 		}
 
-		result, err := h.delhiveryClient.CreateForwardOrder(ctx, order)
+		updatedOrder, err := h.scheduleDelhivery(ctx, order, actor)
 		if err != nil {
-			failures = append(failures, models.DirectOrderBulkForwardItem{
-				OrderID: orderID,
-				Error:   err.Error(),
-			})
-			continue
-		}
-
-		updatedOrder, err := h.repo.SaveDelhiveryForwardOrder(ctx, orderID, *result, actor)
-		if err != nil {
-			failures = append(failures, models.DirectOrderBulkForwardItem{
-				OrderID: orderID,
-				Error:   resolveDirectOrderError(err),
-			})
+			failures = append(failures, models.DirectOrderBulkForwardItem{OrderID: orderID, Error: err.Error()})
 			continue
 		}
 
@@ -463,6 +455,33 @@ func (h *DirectOrderHandler) CreateDelhiveryForwardOrdersBulk(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// The same database claim prevents simultaneous DTDC and Delhivery bookings.
+func (h *DirectOrderHandler) scheduleDelhivery(ctx context.Context, order *models.DirectOrder, actor string) (*models.DirectOrder, error) {
+	if err := h.delhiveryClient.ValidateForwardOrder(order); err != nil {
+		return nil, err
+	}
+	if err := h.repo.ClaimShipment(ctx, order.OrderID, "delhivery", actor, order.UpdatedAt); err != nil {
+		return nil, err
+	}
+	result, err := h.delhiveryClient.CreateForwardOrder(ctx, order)
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err != nil {
+		var rejected *delhivery.RejectedError
+		uncertain := !errors.As(err, &rejected)
+		saveErr := h.repo.SetShipmentBookingFailure(saveCtx, order.OrderID, uncertain)
+		if uncertain || saveErr != nil {
+			return nil, fmt.Errorf("%w. Booking locked for review; verify Delhivery reference %s before retrying", err, order.OrderID)
+		}
+		return nil, err
+	}
+	updated, err := h.repo.SaveDelhiveryForwardOrder(saveCtx, order.OrderID, *result, actor)
+	if err != nil {
+		return nil, fmt.Errorf("Delhivery accepted this booking but local save failed; reconcile reference %s before further actions", order.OrderID)
+	}
+	return updated, nil
 }
 
 func parseDirectOrderFilters(c *gin.Context) models.DirectOrderFilters {
@@ -490,6 +509,15 @@ func parseDirectOrderFilters(c *gin.Context) models.DirectOrderFilters {
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 500 {
+		limit = 500
+	}
 	filters.Page = page
 	filters.Limit = limit
 	return filters

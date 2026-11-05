@@ -30,6 +30,10 @@ type Config struct {
 	ClientGSTIN           string
 }
 
+type RejectedError struct{ Message string }
+
+func (e *RejectedError) Error() string { return e.Message }
+
 type Client struct {
 	baseURL    string
 	apiToken   string
@@ -194,27 +198,39 @@ func (c *Client) LookupPincode(ctx context.Context, pincode string) (*models.Dir
 	}, nil
 }
 
-func (c *Client) CreateForwardOrder(ctx context.Context, order *models.DirectOrder) (*models.DelhiveryForwardOrderResult, error) {
+func (c *Client) ValidateForwardOrder(order *models.DirectOrder) error {
+	if order.OrderStatus == "cancelled" {
+		return fmt.Errorf("cannot book a cancelled order")
+	}
+
 	if !c.Enabled() {
-		return nil, fmt.Errorf("Delhivery token is not configured. Set DELHIVERY_API_TOKEN and restart the backend")
+		return fmt.Errorf("Delhivery token is not configured. Set DELHIVERY_API_TOKEN and restart the backend")
 	}
 	if strings.TrimSpace(c.config.SellerGSTIN) == "" {
-		return nil, fmt.Errorf("Delhivery seller GSTIN is required. Set DELHIVERY_SELLER_GSTIN in the backend environment and restart the service")
+		return fmt.Errorf("Delhivery seller GSTIN is required. Set DELHIVERY_SELLER_GSTIN in the backend environment and restart the service")
 	}
 
 	pickupLocation := strings.TrimSpace(valueOrDefault(order.PickupLocation, c.config.DefaultPickupLocation))
 	if pickupLocation == "" {
-		return nil, fmt.Errorf("pickup location is required before sending an order to Delhivery")
+		return fmt.Errorf("pickup location is required before sending an order to Delhivery")
+	}
+	_, err := c.buildShipment(order)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) CreateForwardOrder(ctx context.Context, order *models.DirectOrder) (*models.DelhiveryForwardOrderResult, error) {
+	if err := c.ValidateForwardOrder(order); err != nil {
+		return nil, err
 	}
 	shipment, err := c.buildShipment(order)
 	if err != nil {
 		return nil, err
 	}
-
-	payload := createOrderPayload{
-		Shipments:      []shipmentPayload{shipment},
-		PickupLocation: map[string]string{"name": pickupLocation},
-	}
+	payload := createOrderPayload{Shipments: []shipmentPayload{shipment}, PickupLocation: map[string]string{"name": strings.TrimSpace(valueOrDefault(order.PickupLocation, c.config.DefaultPickupLocation))}}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -244,7 +260,10 @@ func (c *Client) CreateForwardOrder(ctx context.Context, order *models.DirectOrd
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("Delhivery create order failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 {
+			return nil, &RejectedError{fmt.Sprintf("Delhivery rejected the booking (HTTP %d)", resp.StatusCode)}
+		}
+		return nil, fmt.Errorf("Delhivery create order returned HTTP %d; verify shipment before retrying", resp.StatusCode)
 	}
 
 	var decoded createOrderResponse
@@ -252,8 +271,17 @@ func (c *Client) CreateForwardOrder(ctx context.Context, order *models.DirectOrd
 		return nil, fmt.Errorf("decode Delhivery response: %w", err)
 	}
 
-	if !decoded.Success && len(decoded.Packages) == 0 && decoded.Error != "" {
-		return nil, fmt.Errorf("Delhivery create order failed: %s", decoded.Error)
+	if len(decoded.Packages) == 0 {
+		if !decoded.Success && decoded.Error != "" {
+			return nil, &RejectedError{"Delhivery rejected the booking: " + decoded.Error}
+		}
+		return nil, fmt.Errorf("Delhivery did not confirm a shipment; verify before retrying")
+	}
+	if strings.EqualFold(decoded.Packages[0].Status, "Fail") || strings.EqualFold(decoded.Packages[0].Status, "Failure") {
+		return nil, &RejectedError{"Delhivery rejected the shipment: " + strings.Join(decoded.Packages[0].Remarks, "; ")}
+	}
+	if decoded.Packages[0].Waybill == "" {
+		return nil, fmt.Errorf("Delhivery did not confirm an AWB; verify shipment before retrying")
 	}
 
 	result := &models.DelhiveryForwardOrderResult{
